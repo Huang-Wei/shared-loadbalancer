@@ -19,7 +19,6 @@ package sharedlb
 import (
 	"context"
 	"log"
-	"reflect"
 
 	kubeconv1alpha1 "github.com/Huang-Wei/shared-loadbalancer/pkg/apis/kubecon/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
@@ -152,15 +151,17 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 		return reconcile.Result{}, err
 	}
 
+	// We don't care about update of dependents
+	// And even we care, don't use reflect.DeepEqual() on spec
 	// TODO(user): Change this for the object type created by your controller
 	// Update the found object and write the result back if there are any changes
-	if !reflect.DeepEqual(deploy.Spec, found.Spec) {
-		found.Spec = deploy.Spec
-		log.Printf("Updating Deployment %s/%s\n", deploy.Namespace, deploy.Name)
-		err = r.Update(context.TODO(), found)
-		if err != nil {
-			return reconcile.Result{}, err
-		}
-	}
+	// if !reflect.DeepEqual(deploy.Spec, found.Spec) {
+	// 	found.Spec = deploy.Spec
+	// 	log.Printf("Updating Deployment %s/%s\n", deploy.Namespace, deploy.Name)
+	// 	err = r.Update(context.TODO(), found)
+	// 	if err != nil {
+	// 		return reconcile.Result{}, err
+	// 	}
+	// }
 	return reconcile.Result{}, nil
 }

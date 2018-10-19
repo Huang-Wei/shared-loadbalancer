@@ -30,7 +30,7 @@ import (
 )
 
 func main() {
-	logf.SetLogger(logf.ZapLogger(false))
+	logf.SetLogger(logf.ZapLogger(true))
 	log := logf.Log.WithName("entrypoint")
 
 	// Get a config to talk to the apiserver
