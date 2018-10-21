@@ -17,22 +17,20 @@ limitations under the License.
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
-
 // SharedLBSpec defines the desired state of SharedLB
 type SharedLBSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	Ports          []corev1.ServicePort `json:"ports,omitempty"`
+	Selector       map[string]string    `json:"selector,omitempty"`
+	LoadBalancerIP string               `json:"loadBalancerIP,omitempty"`
 }
 
 // SharedLBStatus defines the observed state of SharedLB
 type SharedLBStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	LoadBalancer corev1.LoadBalancerStatus `json:"loadBalancer,omitempty"`
 }
 
 // +genclient

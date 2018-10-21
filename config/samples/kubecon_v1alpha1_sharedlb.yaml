@@ -5,5 +5,8 @@ metadata:
     controller-tools.k8s.io: "1.0"
   name: sharedlb-sample
 spec:
-  # Add fields here
-  foo: bar
+  ports:
+  - port: 8080
+    targetPort: 80
+  selector:
+    app: nginx

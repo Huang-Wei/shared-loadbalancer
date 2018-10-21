@@ -7,7 +7,7 @@ rules:
 - apiGroups:
   - apps
   resources:
-  - deployments
+  - services
   verbs:
   - get
   - list

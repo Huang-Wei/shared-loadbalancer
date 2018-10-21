@@ -10,6 +10,8 @@ spec:
   names:
     kind: SharedLB
     plural: sharedlbs
+    shortNames:
+    - slb
   scope: Namespaced
   validation:
     openAPIV3Schema:
@@ -21,8 +23,20 @@ spec:
         metadata:
           type: object
         spec:
+          properties:
+            loadBalancerIP:
+              type: string
+            ports:
+              items:
+                type: object
+              type: array
+            selector:
+              type: object
           type: object
         status:
+          properties:
+            loadBalancer:
+              type: object
           type: object
   version: v1alpha1
 status:
