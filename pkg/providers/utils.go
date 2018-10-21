@@ -17,17 +17,20 @@ limitations under the License.
 package providers
 
 import (
-	kubeconv1alpha1 "github.com/Huang-Wei/shared-loadbalancer/pkg/apis/kubecon/v1alpha1"
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/types"
+	"math/rand"
+	"time"
 )
 
-// LBProvider defines methods that a loadbalancer provider should implement
-type LBProvider interface {
-	NewService(sharedLB *kubeconv1alpha1.SharedLB) *corev1.Service
-	NewLBService() *corev1.Service
-	GetAvailabelLB() *corev1.Service
-	AssociateLB(crd, lb types.NamespacedName) error
-	DeassociateLB(crd, lb types.NamespacedName) error
-	UpdateCache(key types.NamespacedName, val *corev1.Service)
+func init() {
+	rand.Seed(time.Now().UnixNano())
+}
+
+var letterRunes = []rune("0123456789abcdefghijklmnopqrstuvwxyz")
+
+func RandStringRunes(n int) string {
+	b := make([]rune, n)
+	for i := range b {
+		b[i] = letterRunes[rand.Intn(len(letterRunes))]
+	}
+	return string(b)
 }

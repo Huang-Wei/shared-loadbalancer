@@ -5,7 +5,7 @@ metadata:
   name: manager-role
 rules:
 - apiGroups:
-  - apps
+  - ""
   resources:
   - services
   verbs:

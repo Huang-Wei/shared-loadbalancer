@@ -19,11 +19,13 @@ package sharedlb
 import (
 	"context"
 	"log"
+	"strings"
+	"time"
 
 	kubeconv1alpha1 "github.com/Huang-Wei/shared-loadbalancer/pkg/apis/kubecon/v1alpha1"
+	"github.com/Huang-Wei/shared-loadbalancer/pkg/providers"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -50,8 +52,9 @@ func Add(mgr manager.Manager) error {
 // newReconciler returns a new reconcile.Reconciler
 func newReconciler(mgr manager.Manager) reconcile.Reconciler {
 	return &ReconcileSharedLB{
-		Client: mgr.GetClient(),
-		scheme: mgr.GetScheme(),
+		Client:   mgr.GetClient(),
+		scheme:   mgr.GetScheme(),
+		provider: providers.NewLocalProvider(),
 	}
 }
 
@@ -59,6 +62,30 @@ func newReconciler(mgr manager.Manager) reconcile.Reconciler {
 func add(mgr manager.Manager, r reconcile.Reconciler) error {
 	// Create a new controller
 	c, err := controller.New("sharedlb-controller", mgr, controller.Options{Reconciler: r})
+	if err != nil {
+		return err
+	}
+
+	// Watch LB Service
+	mapFn := handler.ToRequestsFunc(
+		func(o handler.MapObject) []reconcile.Request {
+			_, ok := o.Meta.GetLabels()["lb-template"]
+			if !ok {
+				return nil
+			}
+			return []reconcile.Request{
+				{NamespacedName: types.NamespacedName{
+					Name:      o.Meta.GetName(),
+					Namespace: o.Meta.GetNamespace(),
+				}},
+			}
+		})
+	err = c.Watch(
+		&source.Kind{Type: &corev1.Service{}},
+		&handler.EnqueueRequestsFromMapFunc{
+			ToRequests: mapFn,
+		},
+	)
 	if err != nil {
 		return err
 	}
@@ -92,7 +119,8 @@ var _ reconcile.Reconciler = &ReconcileSharedLB{}
 // ReconcileSharedLB reconciles a SharedLB object
 type ReconcileSharedLB struct {
 	client.Client
-	scheme *runtime.Scheme
+	scheme   *runtime.Scheme
+	provider providers.LBProvider
 }
 
 // Reconcile reads that state of the cluster for a SharedLB object and makes changes based on the state read
@@ -100,34 +128,38 @@ type ReconcileSharedLB struct {
 // TODO(user): Modify this Reconcile function to implement your Controller logic.
 // The scaffolding writes a Service as an example
 // Automatically generate RBAC rules to allow the Controller to read and write Services
-// +kubebuilder:rbac:groups=apps,resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=kubecon.k8s.io,resources=sharedlbs,verbs=get;list;watch;create;update;patch;delete
 func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Result, error) {
-	// Fetch the SharedLB instance
-	instance := &kubeconv1alpha1.SharedLB{}
-	err := r.Get(context.TODO(), request.NamespacedName, instance)
+	log.Printf("[DEBUG] request: %v", request.NamespacedName)
+	lbPlaceholder := &corev1.Service{}
+	err := r.Get(context.TODO(), request.NamespacedName, lbPlaceholder)
+	if err == nil {
+		log.Printf("[DEBUG] update cache")
+		r.provider.UpdateCache(request.NamespacedName, lbPlaceholder)
+		return reconcile.Result{}, nil
+	}
+
+	// Fetch the SharedLB CRD object
+	crdObj := &kubeconv1alpha1.SharedLB{}
+	err = r.Get(context.TODO(), request.NamespacedName, crdObj)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			// Object not found, return.  Created objects are automatically garbage collected.
 			// For additional cleanup logic use finalizers.
+			// TODO(Huang-Wei): need to deassociate with the LoadBalancer service
 			return reconcile.Result{}, nil
 		}
 		// Error reading the object - requeue the request.
 		return reconcile.Result{}, err
+	} else if crdObj.Status.Ref != "" {
+		strs := strings.Split(crdObj.Status.Ref, "/")
+		r.provider.AssociateLB(request.NamespacedName, types.NamespacedName{Namespace: strs[0], Name: strs[1]})
 	}
 
 	// Define the desired Service object
-	service := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      instance.Name + "-service",
-			Namespace: instance.Namespace,
-		},
-		Spec: corev1.ServiceSpec{
-			Ports:    instance.Spec.Ports,
-			Selector: instance.Spec.Selector,
-		},
-	}
-	if err := controllerutil.SetControllerReference(instance, service, r.scheme); err != nil {
+	service := r.provider.NewService(crdObj)
+	if err := controllerutil.SetControllerReference(crdObj, service, r.scheme); err != nil {
 		return reconcile.Result{}, err
 	}
 
@@ -135,8 +167,40 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 	found := &corev1.Service{}
 	err = r.Get(context.TODO(), types.NamespacedName{Name: service.Name, Namespace: service.Namespace}, found)
 	if err != nil && errors.IsNotFound(err) {
+		// fetch an available LoadBalancer Service
+		availableLB := r.provider.GetAvailabelLB()
+		if availableLB == nil {
+			log.Printf("Creating LoadBalancer Service")
+			availableLB = r.provider.NewLBService()
+			err = r.Create(context.TODO(), availableLB)
+			if err != nil {
+				log.Printf("[ERROR] Creating LoadBalancer Service Failed")
+				// backoff a bit
+				return reconcile.Result{RequeueAfter: time.Second * 1}, err
+			}
+			r.provider.UpdateCache(types.NamespacedName{Name: availableLB.Name, Namespace: availableLB.Namespace}, availableLB)
+		} else {
+			log.Printf("Reusing LoadBalancer Service")
+		}
+
+		lbNamespacedName := types.NamespacedName{Name: availableLB.Name, Namespace: availableLB.Namespace}
+		log.Printf("Associate CRD with LoadBalancer Service")
+		if err = r.provider.AssociateLB(request.NamespacedName, lbNamespacedName); err != nil {
+			log.Printf("[ERROR] Associate Service with LoadBalancer Service Failed")
+			// backoff a bit
+			return reconcile.Result{RequeueAfter: time.Second * 1}, err
+		}
+
 		log.Printf("Creating Service %s/%s\n", service.Namespace, service.Name)
 		err = r.Create(context.TODO(), service)
+		if err != nil {
+			return reconcile.Result{}, err
+		}
+
+		// update CRD obj again
+		crdObj.Status.Ref = lbNamespacedName.String()
+		crdObj.Status.LoadBalancer = availableLB.Status.LoadBalancer
+		err = r.Update(context.TODO(), crdObj)
 		if err != nil {
 			return reconcile.Result{}, err
 		}

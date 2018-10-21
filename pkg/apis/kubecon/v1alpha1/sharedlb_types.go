@@ -30,6 +30,7 @@ type SharedLBSpec struct {
 
 // SharedLBStatus defines the observed state of SharedLB
 type SharedLBStatus struct {
+	Ref          string                    `json:"ref,omitempty"`
 	LoadBalancer corev1.LoadBalancerStatus `json:"loadBalancer,omitempty"`
 }
 
