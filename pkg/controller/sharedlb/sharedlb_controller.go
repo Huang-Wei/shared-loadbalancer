@@ -49,7 +49,10 @@ func Add(mgr manager.Manager) error {
 
 // newReconciler returns a new reconcile.Reconciler
 func newReconciler(mgr manager.Manager) reconcile.Reconciler {
-	return &ReconcileSharedLB{Client: mgr.GetClient(), scheme: mgr.GetScheme()}
+	return &ReconcileSharedLB{
+		Client: mgr.GetClient(),
+		scheme: mgr.GetScheme(),
+	}
 }
 
 // add adds a new Controller to mgr with r as the reconcile.Reconciler
@@ -61,16 +64,22 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 	}
 
 	// Watch for changes to SharedLB
-	err = c.Watch(&source.Kind{Type: &kubeconv1alpha1.SharedLB{}}, &handler.EnqueueRequestForObject{})
+	err = c.Watch(
+		&source.Kind{Type: &kubeconv1alpha1.SharedLB{}},
+		&handler.EnqueueRequestForObject{},
+	)
 	if err != nil {
 		return err
 	}
 
 	// Watch a Service created by SharedLB
-	err = c.Watch(&source.Kind{Type: &corev1.Service{}}, &handler.EnqueueRequestForOwner{
-		IsController: true,
-		OwnerType:    &kubeconv1alpha1.SharedLB{},
-	})
+	err = c.Watch(
+		&source.Kind{Type: &corev1.Service{}},
+		&handler.EnqueueRequestForOwner{
+			IsController: true,
+			OwnerType:    &kubeconv1alpha1.SharedLB{},
+		},
+	)
 	if err != nil {
 		return err
 	}
