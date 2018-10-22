@@ -58,10 +58,18 @@ func Add(mgr manager.Manager) error {
 
 // newReconciler returns a new reconcile.Reconciler
 func newReconciler(mgr manager.Manager) reconcile.Reconciler {
+	var provider providers.LBProvider
+	log.Info("building Reconciler", "provider", providers.Provider)
+	switch providers.Provider {
+	case "iks":
+		provider = providers.NewIKSProvider()
+	case "local":
+		provider = providers.NewLocalProvider()
+	}
 	return &ReconcileSharedLB{
 		Client:   mgr.GetClient(),
 		scheme:   mgr.GetScheme(),
-		provider: providers.NewLocalProvider(),
+		provider: provider,
 	}
 }
 

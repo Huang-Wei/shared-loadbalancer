@@ -18,6 +18,7 @@ package providers
 
 import (
 	"math/rand"
+	"os"
 	"time"
 )
 
@@ -33,4 +34,11 @@ func RandStringRunes(n int) string {
 		b[i] = letterRunes[rand.Intn(len(letterRunes))]
 	}
 	return string(b)
+}
+
+func GetEnvVal(envKey, defVal string) string {
+	if val := os.Getenv(envKey); val != "" {
+		return val
+	}
+	return defVal
 }

@@ -25,9 +25,11 @@ import (
 )
 
 var log logr.Logger
+var Provider string
 
 func init() {
 	log = logf.Log.WithName("providers")
+	Provider = GetEnvVal("PROVIDER", "local")
 }
 
 // LBProvider defines methods that a loadbalancer provider should implement
@@ -39,4 +41,8 @@ type LBProvider interface {
 	// DeassociateLB(crd, lb types.NamespacedName) error
 	DeassociateLB(crd types.NamespacedName) error
 	UpdateCache(key types.NamespacedName, val *corev1.Service)
+
+	GetCapacityPerLB() int
 }
+
+type nameSet map[types.NamespacedName]struct{}

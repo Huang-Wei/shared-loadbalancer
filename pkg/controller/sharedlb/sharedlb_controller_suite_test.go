@@ -17,7 +17,7 @@ limitations under the License.
 package sharedlb
 
 import (
-	"log"
+	lg "log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -42,7 +42,7 @@ func TestMain(m *testing.M) {
 
 	var err error
 	if cfg, err = t.Start(); err != nil {
-		log.Fatal(err)
+		lg.Fatal(err)
 	}
 
 	code := m.Run()

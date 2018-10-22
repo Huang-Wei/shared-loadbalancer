@@ -23,7 +23,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
-type Local struct {
+// IKS stands for IBM Kubernetes Service
+type IKS struct {
 	// key is namespacedName of a LB Serivce, val is the service
 	cacheMap map[types.NamespacedName]*corev1.Service
 	// TODO(Huang-Wei): keyName => IaaS stuff
@@ -40,26 +41,26 @@ type Local struct {
 	credentials   string
 }
 
-var _ LBProvider = &Local{}
+var _ LBProvider = &IKS{}
 
-func NewLocalProvider() *Local {
-	return &Local{
+func NewIKSProvider() *IKS {
+	return &IKS{
 		cacheMap:      make(map[types.NamespacedName]*corev1.Service),
 		crdToLB:       make(map[types.NamespacedName]types.NamespacedName),
 		lbToCRD:       make(map[types.NamespacedName]nameSet),
-		capacityPerLB: 3,
+		capacityPerLB: 2,
 	}
 }
 
-func (l *Local) GetCapacityPerLB() int {
-	return l.capacityPerLB
+func (i *IKS) GetCapacityPerLB() int {
+	return i.capacityPerLB
 }
 
-func (l *Local) UpdateCache(key types.NamespacedName, val *corev1.Service) {
-	l.cacheMap[key] = val
+func (i *IKS) UpdateCache(key types.NamespacedName, val *corev1.Service) {
+	i.cacheMap[key] = val
 }
 
-func (l *Local) NewService(sharedLB *kubeconv1alpha1.SharedLB) *corev1.Service {
+func (i *IKS) NewService(sharedLB *kubeconv1alpha1.SharedLB) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      sharedLB.Name + "-service",
@@ -72,7 +73,7 @@ func (l *Local) NewService(sharedLB *kubeconv1alpha1.SharedLB) *corev1.Service {
 	}
 }
 
-func (l *Local) NewLBService() *corev1.Service {
+func (i *IKS) NewLBService() *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "lb-" + RandStringRunes(8),
@@ -90,9 +91,9 @@ func (l *Local) NewLBService() *corev1.Service {
 	}
 }
 
-func (l *Local) GetAvailabelLB() *corev1.Service {
-	for lbKey, lbSvc := range l.cacheMap {
-		if len(l.lbToCRD[lbKey]) < l.capacityPerLB {
+func (i *IKS) GetAvailabelLB() *corev1.Service {
+	for lbKey, lbSvc := range i.cacheMap {
+		if len(i.lbToCRD[lbKey]) < i.capacityPerLB {
 			return lbSvc
 		}
 	}
@@ -100,28 +101,28 @@ func (l *Local) GetAvailabelLB() *corev1.Service {
 	return nil
 }
 
-func (l *Local) AssociateLB(crd, lb types.NamespacedName) error {
-	log.WithName("local").Info("AssociateLB", "crd", crd, "lb", lb)
+func (i *IKS) AssociateLB(crd, lb types.NamespacedName) error {
+	log.WithName("iks").Info("AssociateLB", "crd", crd, "lb", lb)
 	// if lb exists
-	if crds, ok := l.lbToCRD[lb]; ok {
+	if crds, ok := i.lbToCRD[lb]; ok {
 		crds[crd] = struct{}{}
-		l.crdToLB[crd] = lb
+		i.crdToLB[crd] = lb
 	} else {
-		l.lbToCRD[lb] = make(nameSet)
-		l.lbToCRD[lb][crd] = struct{}{}
-		l.crdToLB[crd] = lb
+		i.lbToCRD[lb] = make(nameSet)
+		i.lbToCRD[lb][crd] = struct{}{}
+		i.crdToLB[crd] = lb
 	}
 	// TODO(Huang-Wei): maybe change crd to service
 	// and also do the real association logic
 	return nil
 }
 
-func (l *Local) DeassociateLB(crd types.NamespacedName) error {
+func (i *IKS) DeassociateLB(crd types.NamespacedName) error {
 	// update cache
-	if lb, ok := l.crdToLB[crd]; ok {
-		delete(l.crdToLB, crd)
-		delete(l.lbToCRD[lb], crd)
-		log.WithName("local").Info("DeassociateLB", "crd", crd, "lb", lb)
+	if lb, ok := i.crdToLB[crd]; ok {
+		delete(i.crdToLB, crd)
+		delete(i.lbToCRD[lb], crd)
+		log.WithName("iks").Info("DeassociateLB", "crd", crd, "lb", lb)
 	}
 	return nil
 }
