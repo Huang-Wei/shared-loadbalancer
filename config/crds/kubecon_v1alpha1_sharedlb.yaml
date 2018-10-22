@@ -12,6 +12,14 @@ spec:
     plural: sharedlbs
     shortNames:
     - slb
+  additionalPrinterColumns:
+  - name: External-IP
+    type: string
+    # JSONPath: .spec.loadBalancerIP
+    JSONPath: .status.loadBalancer
+  - name: Ref
+    type: string
+    JSONPath: .status.ref
   scope: Namespaced
   validation:
     openAPIV3Schema:

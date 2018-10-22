@@ -131,7 +131,7 @@ type ReconcileSharedLB struct {
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=kubecon.k8s.io,resources=sharedlbs,verbs=get;list;watch;create;update;patch;delete
 func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Result, error) {
-	log.Printf("[DEBUG] request: %v", request.NamespacedName)
+	// log.Printf("[DEBUG] request: %v", request.NamespacedName)
 	lbPlaceholder := &corev1.Service{}
 	err := r.Get(context.TODO(), request.NamespacedName, lbPlaceholder)
 	if err == nil {
