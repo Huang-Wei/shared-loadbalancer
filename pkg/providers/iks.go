@@ -43,7 +43,7 @@ type IKS struct {
 
 var _ LBProvider = &IKS{}
 
-func NewIKSProvider() *IKS {
+func newIKSProvider() *IKS {
 	return &IKS{
 		cacheMap:      make(map[types.NamespacedName]*corev1.Service),
 		crdToLB:       make(map[types.NamespacedName]types.NamespacedName),

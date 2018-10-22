@@ -25,11 +25,22 @@ import (
 )
 
 var log logr.Logger
-var Provider string
 
 func init() {
 	log = logf.Log.WithName("providers")
-	Provider = GetEnvVal("PROVIDER", "local")
+}
+
+func NewProvider() LBProvider {
+	providerStr := GetEnvVal("PROVIDER", "local")
+	log.Info("New LBProvider", "provider", providerStr)
+	var provider LBProvider
+	switch providerStr {
+	case "iks":
+		provider = newIKSProvider()
+	case "local":
+		provider = newLocalProvider()
+	}
+	return provider
 }
 
 // LBProvider defines methods that a loadbalancer provider should implement

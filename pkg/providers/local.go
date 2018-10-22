@@ -42,7 +42,7 @@ type Local struct {
 
 var _ LBProvider = &Local{}
 
-func NewLocalProvider() *Local {
+func newLocalProvider() *Local {
 	return &Local{
 		cacheMap:      make(map[types.NamespacedName]*corev1.Service),
 		crdToLB:       make(map[types.NamespacedName]types.NamespacedName),
