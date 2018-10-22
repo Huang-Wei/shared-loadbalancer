@@ -99,6 +99,7 @@ func (l *Local) GetAvailabelLB() *corev1.Service {
 }
 
 func (l *Local) AssociateLB(crd, lb types.NamespacedName) error {
+	log.WithName("local").Info("AssociateLB", "crd", crd, "lb", lb)
 	// if lb exists
 	if crds, ok := l.lbToCRD[lb]; ok {
 		crds[crd] = struct{}{}
@@ -113,6 +114,12 @@ func (l *Local) AssociateLB(crd, lb types.NamespacedName) error {
 	return nil
 }
 
-func (l *Local) DeassociateLB(crd, lb types.NamespacedName) error {
+func (l *Local) DeassociateLB(crd types.NamespacedName) error {
+	// update cache
+	if lb, ok := l.crdToLB[crd]; ok {
+		delete(l.crdToLB, crd)
+		delete(l.lbToCRD[lb], crd)
+		log.WithName("local").Info("DeassociateLB", "crd", crd, "lb", lb)
+	}
 	return nil
 }

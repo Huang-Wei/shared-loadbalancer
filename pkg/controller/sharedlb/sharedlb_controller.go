@@ -18,12 +18,12 @@ package sharedlb
 
 import (
 	"context"
-	"log"
 	"strings"
 	"time"
 
 	kubeconv1alpha1 "github.com/Huang-Wei/shared-loadbalancer/pkg/apis/kubecon/v1alpha1"
 	"github.com/Huang-Wei/shared-loadbalancer/pkg/providers"
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -34,8 +34,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	logf "sigs.k8s.io/controller-runtime/pkg/runtime/log"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 )
+
+var log logr.Logger
+
+func init() {
+	log = logf.Log.WithName("slb_controller")
+}
 
 /**
 * USER ACTION REQUIRED: This is a scaffold file intended for the user to modify with their own Controller
@@ -135,7 +142,7 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 	lbPlaceholder := &corev1.Service{}
 	err := r.Get(context.TODO(), request.NamespacedName, lbPlaceholder)
 	if err == nil {
-		log.Printf("[DEBUG] update cache")
+		log.Info("Updating cache", "lbPlaceHolder", lbPlaceholder.Name)
 		r.provider.UpdateCache(request.NamespacedName, lbPlaceholder)
 		return reconcile.Result{}, nil
 	}
@@ -147,7 +154,9 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 		if errors.IsNotFound(err) {
 			// Object not found, return.  Created objects are automatically garbage collected.
 			// For additional cleanup logic use finalizers.
-			// TODO(Huang-Wei): need to deassociate with the LoadBalancer service
+			// TODO(Huang-Wei): use finalizers to do this
+			// need to deassociate with the LoadBalancer service
+			r.provider.DeassociateLB(request.NamespacedName)
 			return reconcile.Result{}, nil
 		}
 		// Error reading the object - requeue the request.
@@ -170,28 +179,27 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 		// fetch an available LoadBalancer Service
 		availableLB := r.provider.GetAvailabelLB()
 		if availableLB == nil {
-			log.Printf("Creating LoadBalancer Service")
+			log.Info("Creating a real LoadBalancer Service")
 			availableLB = r.provider.NewLBService()
 			err = r.Create(context.TODO(), availableLB)
 			if err != nil {
-				log.Printf("[ERROR] Creating LoadBalancer Service Failed")
+				log.Error(err, "Creating LoadBalancer Service Failed", "name", availableLB.Name)
 				// backoff a bit
 				return reconcile.Result{RequeueAfter: time.Second * 1}, err
 			}
 			r.provider.UpdateCache(types.NamespacedName{Name: availableLB.Name, Namespace: availableLB.Namespace}, availableLB)
 		} else {
-			log.Printf("Reusing LoadBalancer Service")
+			log.Info("Reusing a LoadBalancer Service", "name", availableLB.Name)
 		}
 
 		lbNamespacedName := types.NamespacedName{Name: availableLB.Name, Namespace: availableLB.Namespace}
-		log.Printf("Associate CRD with LoadBalancer Service")
 		if err = r.provider.AssociateLB(request.NamespacedName, lbNamespacedName); err != nil {
-			log.Printf("[ERROR] Associate Service with LoadBalancer Service Failed")
+			// log.Printf("[ERROR] Associate Service with LoadBalancer Service Failed")
 			// backoff a bit
 			return reconcile.Result{RequeueAfter: time.Second * 1}, err
 		}
 
-		log.Printf("Creating Service %s/%s\n", service.Namespace, service.Name)
+		// log.Printf("Creating Service %s/%s\n", service.Namespace, service.Name)
 		err = r.Create(context.TODO(), service)
 		if err != nil {
 			return reconcile.Result{}, err

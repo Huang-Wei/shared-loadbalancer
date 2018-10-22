@@ -18,9 +18,17 @@ package providers
 
 import (
 	kubeconv1alpha1 "github.com/Huang-Wei/shared-loadbalancer/pkg/apis/kubecon/v1alpha1"
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
+	logf "sigs.k8s.io/controller-runtime/pkg/runtime/log"
 )
+
+var log logr.Logger
+
+func init() {
+	log = logf.Log.WithName("providers")
+}
 
 // LBProvider defines methods that a loadbalancer provider should implement
 type LBProvider interface {
@@ -28,6 +36,7 @@ type LBProvider interface {
 	NewLBService() *corev1.Service
 	GetAvailabelLB() *corev1.Service
 	AssociateLB(crd, lb types.NamespacedName) error
-	DeassociateLB(crd, lb types.NamespacedName) error
+	// DeassociateLB(crd, lb types.NamespacedName) error
+	DeassociateLB(crd types.NamespacedName) error
 	UpdateCache(key types.NamespacedName, val *corev1.Service)
 }
