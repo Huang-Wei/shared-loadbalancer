@@ -30,12 +30,10 @@ type IKS struct {
 	// TODO(Huang-Wei): keyName => IaaS stuff
 	// cacheIaaSMap
 
-	// crd to LB is 1:1 mapping
-	// crdToLB map[types.NamespacedName]types.NamespacedName
-	crdToLB map[types.NamespacedName]types.NamespacedName
+	// cr to LB is 1:1 mapping
+	crToLB map[types.NamespacedName]types.NamespacedName
 	// lb to CRD is 1:N mapping
-	// lbToCRD     map[types.NamespacedName]nameSet
-	lbToCRD map[types.NamespacedName]nameSet
+	lbToCRs map[types.NamespacedName]nameSet
 
 	capacityPerLB int
 	credentials   string
@@ -46,8 +44,8 @@ var _ LBProvider = &IKS{}
 func newIKSProvider() *IKS {
 	return &IKS{
 		cacheMap:      make(map[types.NamespacedName]*corev1.Service),
-		crdToLB:       make(map[types.NamespacedName]types.NamespacedName),
-		lbToCRD:       make(map[types.NamespacedName]nameSet),
+		crToLB:        make(map[types.NamespacedName]types.NamespacedName),
+		lbToCRs:       make(map[types.NamespacedName]nameSet),
 		capacityPerLB: 2,
 	}
 }
@@ -63,7 +61,7 @@ func (i *IKS) UpdateCache(key types.NamespacedName, val *corev1.Service) {
 func (i *IKS) NewService(sharedLB *kubeconv1alpha1.SharedLB) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      sharedLB.Name + "-service",
+			Name:      sharedLB.Name + svcPostfix,
 			Namespace: sharedLB.Namespace,
 		},
 		Spec: corev1.ServiceSpec{
@@ -76,14 +74,20 @@ func (i *IKS) NewService(sharedLB *kubeconv1alpha1.SharedLB) *corev1.Service {
 func (i *IKS) NewLBService() *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "lb-" + RandStringRunes(8),
+			Name: "lb-" + RandStringRunes(8),
+			// TODO(Huang-Wei): should put namespace as sharedlb-mgmt-namespace
 			Namespace: "default",
 			Labels:    map[string]string{"lb-template": ""},
 		},
 		Spec: corev1.ServiceSpec{
 			Ports: []corev1.ServicePort{
 				{
-					Port: 33333,
+					Protocol: corev1.ProtocolTCP,
+					Port:     33333,
+				},
+				{
+					Protocol: corev1.ProtocolUDP,
+					Port:     33333,
 				},
 			},
 			Type: corev1.ServiceTypeLoadBalancer,
@@ -93,7 +97,7 @@ func (i *IKS) NewLBService() *corev1.Service {
 
 func (i *IKS) GetAvailabelLB() *corev1.Service {
 	for lbKey, lbSvc := range i.cacheMap {
-		if len(i.lbToCRD[lbKey]) < i.capacityPerLB {
+		if len(i.lbToCRs[lbKey]) < i.capacityPerLB {
 			return lbSvc
 		}
 	}
@@ -101,28 +105,38 @@ func (i *IKS) GetAvailabelLB() *corev1.Service {
 	return nil
 }
 
-func (i *IKS) AssociateLB(crd, lb types.NamespacedName) error {
-	log.WithName("iks").Info("AssociateLB", "crd", crd, "lb", lb)
+func (i *IKS) AssociateLB(crName, lbName types.NamespacedName) error {
+	log.WithName("iks").Info("AssociateLB", "cr", crName, "lb", lbName)
 	// if lb exists
-	if crds, ok := i.lbToCRD[lb]; ok {
-		crds[crd] = struct{}{}
-		i.crdToLB[crd] = lb
+	if crs, ok := i.lbToCRs[lbName]; ok {
+		crs[crName] = struct{}{}
+		i.crToLB[crName] = lbName
 	} else {
-		i.lbToCRD[lb] = make(nameSet)
-		i.lbToCRD[lb][crd] = struct{}{}
-		i.crdToLB[crd] = lb
+		i.lbToCRs[lbName] = make(nameSet)
+		i.lbToCRs[lbName][crName] = struct{}{}
+		i.crToLB[crName] = lbName
 	}
-	// TODO(Huang-Wei): maybe change crd to service
-	// and also do the real association logic
 	return nil
 }
 
 func (i *IKS) DeassociateLB(crd types.NamespacedName) error {
 	// update cache
-	if lb, ok := i.crdToLB[crd]; ok {
-		delete(i.crdToLB, crd)
-		delete(i.lbToCRD[lb], crd)
+	if lb, ok := i.crToLB[crd]; ok {
+		delete(i.crToLB, crd)
+		delete(i.lbToCRs[lb], crd)
 		log.WithName("iks").Info("DeassociateLB", "crd", crd, "lb", lb)
 	}
 	return nil
+}
+
+func (i *IKS) UpdateService(svc, lb *corev1.Service) bool {
+	if len(lb.Status.LoadBalancer.Ingress) != 1 {
+		log.Info("No ingress info in lb.Status.LoadBalancer. Skip.")
+		return false
+	}
+	// for IKS, we're setting loadbalancer info as "externalIP" to the service
+	ingress := lb.Status.LoadBalancer.Ingress[0]
+	svc.Spec.ExternalIPs = append(svc.Spec.ExternalIPs, ingress.IP)
+	log.Info("Setting ExternalIP to service", "externalIP", ingress.IP)
+	return true
 }

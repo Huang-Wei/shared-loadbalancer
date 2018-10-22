@@ -147,9 +147,9 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 		return reconcile.Result{}, nil
 	}
 
-	// Fetch the SharedLB CRD object
-	crdObj := &kubeconv1alpha1.SharedLB{}
-	err = r.Get(context.TODO(), request.NamespacedName, crdObj)
+	// Fetch the SharedLB CR object
+	crObj := &kubeconv1alpha1.SharedLB{}
+	err = r.Get(context.TODO(), request.NamespacedName, crObj)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			// Object not found, return.  Created objects are automatically garbage collected.
@@ -161,14 +161,14 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 		}
 		// Error reading the object - requeue the request.
 		return reconcile.Result{}, err
-	} else if crdObj.Status.Ref != "" {
-		strs := strings.Split(crdObj.Status.Ref, "/")
+	} else if crObj.Status.Ref != "" {
+		strs := strings.Split(crObj.Status.Ref, "/")
 		r.provider.AssociateLB(request.NamespacedName, types.NamespacedName{Namespace: strs[0], Name: strs[1]})
 	}
 
 	// Define the desired Service object
-	service := r.provider.NewService(crdObj)
-	if err := controllerutil.SetControllerReference(crdObj, service, r.scheme); err != nil {
+	service := r.provider.NewService(crObj)
+	if err := controllerutil.SetControllerReference(crObj, service, r.scheme); err != nil {
 		return reconcile.Result{}, err
 	}
 
@@ -176,7 +176,7 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 	found := &corev1.Service{}
 	err = r.Get(context.TODO(), types.NamespacedName{Name: service.Name, Namespace: service.Namespace}, found)
 	if err != nil && errors.IsNotFound(err) {
-		// fetch an available LoadBalancer Service
+		// fetch an available LoadBalancer Service that can be reused
 		availableLB := r.provider.GetAvailabelLB()
 		if availableLB == nil {
 			log.Info("Creating a real LoadBalancer Service")
@@ -187,6 +187,7 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 				// backoff a bit
 				return reconcile.Result{RequeueAfter: time.Second * 1}, err
 			}
+			log.Info("A real LB is created", "name", availableLB.Name, "lbinfo", availableLB.Status.LoadBalancer)
 			r.provider.UpdateCache(types.NamespacedName{Name: availableLB.Name, Namespace: availableLB.Namespace}, availableLB)
 		} else {
 			log.Info("Reusing a LoadBalancer Service", "name", availableLB.Name)
@@ -194,21 +195,21 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 
 		lbNamespacedName := types.NamespacedName{Name: availableLB.Name, Namespace: availableLB.Namespace}
 		if err = r.provider.AssociateLB(request.NamespacedName, lbNamespacedName); err != nil {
-			// log.Printf("[ERROR] Associate Service with LoadBalancer Service Failed")
 			// backoff a bit
 			return reconcile.Result{RequeueAfter: time.Second * 1}, err
 		}
 
-		// log.Printf("Creating Service %s/%s\n", service.Namespace, service.Name)
+		// for IKS only
+		r.provider.UpdateService(service, availableLB)
 		err = r.Create(context.TODO(), service)
 		if err != nil {
 			return reconcile.Result{}, err
 		}
 
-		// update CRD obj again
-		crdObj.Status.Ref = lbNamespacedName.String()
-		crdObj.Status.LoadBalancer = availableLB.Status.LoadBalancer
-		err = r.Update(context.TODO(), crdObj)
+		// update CR obj again
+		crObj.Status.Ref = lbNamespacedName.String()
+		crObj.Status.LoadBalancer = availableLB.Status.LoadBalancer
+		err = r.Update(context.TODO(), crObj)
 		if err != nil {
 			return reconcile.Result{}, err
 		}

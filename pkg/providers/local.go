@@ -29,12 +29,10 @@ type Local struct {
 	// TODO(Huang-Wei): keyName => IaaS stuff
 	// cacheIaaSMap
 
-	// crd to LB is 1:1 mapping
-	// crdToLB map[types.NamespacedName]types.NamespacedName
-	crdToLB map[types.NamespacedName]types.NamespacedName
+	// cr to LB is 1:1 mapping
+	crToLB map[types.NamespacedName]types.NamespacedName
 	// lb to CRD is 1:N mapping
-	// lbToCRD     map[types.NamespacedName]nameSet
-	lbToCRD map[types.NamespacedName]nameSet
+	lbToCRs map[types.NamespacedName]nameSet
 
 	capacityPerLB int
 	credentials   string
@@ -45,8 +43,8 @@ var _ LBProvider = &Local{}
 func newLocalProvider() *Local {
 	return &Local{
 		cacheMap:      make(map[types.NamespacedName]*corev1.Service),
-		crdToLB:       make(map[types.NamespacedName]types.NamespacedName),
-		lbToCRD:       make(map[types.NamespacedName]nameSet),
+		crToLB:        make(map[types.NamespacedName]types.NamespacedName),
+		lbToCRs:       make(map[types.NamespacedName]nameSet),
 		capacityPerLB: 3,
 	}
 }
@@ -92,7 +90,7 @@ func (l *Local) NewLBService() *corev1.Service {
 
 func (l *Local) GetAvailabelLB() *corev1.Service {
 	for lbKey, lbSvc := range l.cacheMap {
-		if len(l.lbToCRD[lbKey]) < l.capacityPerLB {
+		if len(l.lbToCRs[lbKey]) < l.capacityPerLB {
 			return lbSvc
 		}
 	}
@@ -100,28 +98,31 @@ func (l *Local) GetAvailabelLB() *corev1.Service {
 	return nil
 }
 
-func (l *Local) AssociateLB(crd, lb types.NamespacedName) error {
-	log.WithName("local").Info("AssociateLB", "crd", crd, "lb", lb)
+func (l *Local) AssociateLB(crName, lbName types.NamespacedName) error {
+	log.WithName("local").Info("AssociateLB", "cr", crName, "lb", lbName)
 	// if lb exists
-	if crds, ok := l.lbToCRD[lb]; ok {
-		crds[crd] = struct{}{}
-		l.crdToLB[crd] = lb
+	if crs, ok := l.lbToCRs[lbName]; ok {
+		crs[crName] = struct{}{}
+		l.crToLB[crName] = lbName
 	} else {
-		l.lbToCRD[lb] = make(nameSet)
-		l.lbToCRD[lb][crd] = struct{}{}
-		l.crdToLB[crd] = lb
+		l.lbToCRs[lbName] = make(nameSet)
+		l.lbToCRs[lbName][crName] = struct{}{}
+		l.crToLB[crName] = lbName
 	}
-	// TODO(Huang-Wei): maybe change crd to service
-	// and also do the real association logic
 	return nil
 }
 
 func (l *Local) DeassociateLB(crd types.NamespacedName) error {
 	// update cache
-	if lb, ok := l.crdToLB[crd]; ok {
-		delete(l.crdToLB, crd)
-		delete(l.lbToCRD[lb], crd)
+	if lb, ok := l.crToLB[crd]; ok {
+		delete(l.crToLB, crd)
+		delete(l.lbToCRs[lb], crd)
 		log.WithName("local").Info("DeassociateLB", "crd", crd, "lb", lb)
 	}
 	return nil
+}
+
+func (l *Local) UpdateService(svc, lb *corev1.Service) bool {
+	// nothing to do with local provider here
+	return false
 }

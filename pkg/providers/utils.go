@@ -20,6 +20,9 @@ import (
 	"math/rand"
 	"os"
 	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 func init() {
@@ -41,4 +44,11 @@ func GetEnvVal(envKey, defVal string) string {
 		return val
 	}
 	return defVal
+}
+
+func GetNamespacedName(svc *corev1.Service) types.NamespacedName {
+	if svc == nil {
+		return types.NamespacedName{}
+	}
+	return types.NamespacedName{Name: svc.Name, Namespace: svc.Namespace}
 }

@@ -25,6 +25,7 @@ import (
 )
 
 var log logr.Logger
+var svcPostfix = "-service"
 
 func init() {
 	log = logf.Log.WithName("providers")
@@ -48,12 +49,15 @@ type LBProvider interface {
 	NewService(sharedLB *kubeconv1alpha1.SharedLB) *corev1.Service
 	NewLBService() *corev1.Service
 	GetAvailabelLB() *corev1.Service
-	AssociateLB(crd, lb types.NamespacedName) error
-	// DeassociateLB(crd, lb types.NamespacedName) error
-	DeassociateLB(crd types.NamespacedName) error
+	AssociateLB(cr, lb types.NamespacedName) error
+	DeassociateLB(cr types.NamespacedName) error
 	UpdateCache(key types.NamespacedName, val *corev1.Service)
 
 	GetCapacityPerLB() int
+
+	// TODO(Huang-Wei): can be removed and implement in utils.go
+	// and rename to "UpdateServiceExternalIP"
+	UpdateService(svc, lb *corev1.Service) bool
 }
 
 type nameSet map[types.NamespacedName]struct{}
