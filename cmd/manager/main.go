@@ -22,7 +22,9 @@ import (
 	"github.com/Huang-Wei/shared-loadbalancer/pkg/apis"
 	"github.com/Huang-Wei/shared-loadbalancer/pkg/controller"
 	"github.com/Huang-Wei/shared-loadbalancer/pkg/webhook"
-	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
+
+	// _ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
+	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	logf "sigs.k8s.io/controller-runtime/pkg/runtime/log"

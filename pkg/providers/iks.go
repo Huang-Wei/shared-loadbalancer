@@ -55,7 +55,11 @@ func (i *IKS) GetCapacityPerLB() int {
 }
 
 func (i *IKS) UpdateCache(key types.NamespacedName, val *corev1.Service) {
-	i.cacheMap[key] = val
+	if val == nil {
+		delete(i.cacheMap, key)
+	} else {
+		i.cacheMap[key] = val
+	}
 }
 
 func (i *IKS) NewService(sharedLB *kubeconv1alpha1.SharedLB) *corev1.Service {
@@ -82,13 +86,16 @@ func (i *IKS) NewLBService() *corev1.Service {
 		Spec: corev1.ServiceSpec{
 			Ports: []corev1.ServicePort{
 				{
+					Name:     "tcp",
 					Protocol: corev1.ProtocolTCP,
 					Port:     33333,
 				},
-				{
-					Protocol: corev1.ProtocolUDP,
-					Port:     33333,
-				},
+				// TODO(Huang-Wei): handle UDP case
+				// {
+				// 	Name:     "UDP",
+				// 	Protocol: corev1.ProtocolUDP,
+				// 	Port:     33333,
+				// },
 			},
 			Type: corev1.ServiceTypeLoadBalancer,
 		},

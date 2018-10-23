@@ -142,9 +142,13 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 	lbPlaceholder := &corev1.Service{}
 	err := r.Get(context.TODO(), request.NamespacedName, lbPlaceholder)
 	if err == nil {
-		log.Info("Updating cache", "lbPlaceHolder", lbPlaceholder.Name)
+		log.Info("Updating lb cache.", "lbPlaceHolder", lbPlaceholder.Name)
 		r.provider.UpdateCache(request.NamespacedName, lbPlaceholder)
 		return reconcile.Result{}, nil
+	} else if errors.IsNotFound(err) && strings.Index(request.Name, "lb-") == 0 {
+		// lb service has been deleted (by external user)
+		log.Info("LB Service has been deleted. Updating lb cache.", "name", request.Name)
+		r.provider.UpdateCache(request.NamespacedName, nil)
 	}
 
 	// Fetch the SharedLB CR object
