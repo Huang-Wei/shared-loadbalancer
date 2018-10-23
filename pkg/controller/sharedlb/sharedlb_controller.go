@@ -138,17 +138,22 @@ type ReconcileSharedLB struct {
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=kubecon.k8s.io,resources=sharedlbs,verbs=get;list;watch;create;update;patch;delete
 func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Result, error) {
-	// log.Printf("[DEBUG] request: %v", request.NamespacedName)
-	lbPlaceholder := &corev1.Service{}
-	err := r.Get(context.TODO(), request.NamespacedName, lbPlaceholder)
+	lbSvc := &corev1.Service{}
+	err := r.Get(context.TODO(), request.NamespacedName, lbSvc)
 	if err == nil {
-		log.Info("Updating lb cache.", "lbPlaceHolder", lbPlaceholder.Name)
-		r.provider.UpdateCache(request.NamespacedName, lbPlaceholder)
+		log.Info("LB is created/updated. Updating LB cache.", "name", request.Name)
+		// TODO(Huang-Wei):
+		// 1. return cr ns/name pairs from UpdateCache
+		// 2. iterate each cr item, if its ref is inconsistent with its loadbalancer
+		// 2.1. then update the cr item
+		// 2.2. get Service, call `UpdateService`, if returned true, update Service as well
+		r.provider.UpdateCache(request.NamespacedName, lbSvc)
 		return reconcile.Result{}, nil
 	} else if errors.IsNotFound(err) && strings.Index(request.Name, "lb-") == 0 {
 		// lb service has been deleted (by external user)
-		log.Info("LB Service has been deleted. Updating lb cache.", "name", request.Name)
+		log.Info("LB is deleted. Updating lb cache.", "name", request.Name)
 		r.provider.UpdateCache(request.NamespacedName, nil)
+		return reconcile.Result{}, nil
 	}
 
 	// Fetch the SharedLB CR object
@@ -170,15 +175,15 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 		r.provider.AssociateLB(request.NamespacedName, types.NamespacedName{Namespace: strs[0], Name: strs[1]})
 	}
 
-	// Define the desired Service object
-	service := r.provider.NewService(crObj)
-	if err := controllerutil.SetControllerReference(crObj, service, r.scheme); err != nil {
+	// Define the desired cluster Service object
+	clusterSvc := r.provider.NewService(crObj)
+	if err := controllerutil.SetControllerReference(crObj, clusterSvc, r.scheme); err != nil {
 		return reconcile.Result{}, err
 	}
 
-	// Check if the Service already exists
+	// Check if the cluster Service already exists
 	found := &corev1.Service{}
-	err = r.Get(context.TODO(), types.NamespacedName{Name: service.Name, Namespace: service.Namespace}, found)
+	err = r.Get(context.TODO(), types.NamespacedName{Name: clusterSvc.Name, Namespace: clusterSvc.Namespace}, found)
 	if err != nil && errors.IsNotFound(err) {
 		// fetch an available LoadBalancer Service that can be reused
 		availableLB := r.provider.GetAvailabelLB()
@@ -192,25 +197,25 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 				return reconcile.Result{RequeueAfter: time.Second * 1}, err
 			}
 			log.Info("A real LB is created", "name", availableLB.Name, "lbinfo", availableLB.Status.LoadBalancer)
-			r.provider.UpdateCache(types.NamespacedName{Name: availableLB.Name, Namespace: availableLB.Namespace}, availableLB)
-		} else {
-			log.Info("Reusing a LoadBalancer Service", "name", availableLB.Name)
+			// NOTE: here we directly return to start a new reconcile
+			return reconcile.Result{Requeue: true, RequeueAfter: time.Millisecond * 200}, nil
 		}
 
+		log.Info("Reusing a LoadBalancer Service", "name", availableLB.Name)
 		lbNamespacedName := types.NamespacedName{Name: availableLB.Name, Namespace: availableLB.Namespace}
 		if err = r.provider.AssociateLB(request.NamespacedName, lbNamespacedName); err != nil {
 			// backoff a bit
 			return reconcile.Result{RequeueAfter: time.Second * 1}, err
 		}
 
-		// for IKS only
-		r.provider.UpdateService(service, availableLB)
-		err = r.Create(context.TODO(), service)
+		// it's reusing a LB, so availableLB is expected to carry loadbalancer info
+		r.provider.UpdateService(clusterSvc, availableLB)
+		err = r.Create(context.TODO(), clusterSvc)
 		if err != nil {
 			return reconcile.Result{}, err
 		}
 
-		// update CR obj again
+		// if it's not reusing a LB, availableLB doesn't carry loadbalancer info yet
 		crObj.Status.Ref = lbNamespacedName.String()
 		crObj.Status.LoadBalancer = availableLB.Status.LoadBalancer
 		err = r.Update(context.TODO(), crObj)
@@ -221,17 +226,6 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 		return reconcile.Result{}, err
 	}
 
-	// We don't care about update of dependents
-	// And even we care, don't use reflect.DeepEqual() on spec
-	// TODO(user): Change this for the object type created by your controller
-	// Update the found object and write the result back if there are any changes
-	// if !reflect.DeepEqual(deploy.Spec, found.Spec) {
-	// 	found.Spec = deploy.Spec
-	// 	log.Printf("Updating Deployment %s/%s\n", deploy.Namespace, deploy.Name)
-	// 	err = r.Update(context.TODO(), found)
-	// 	if err != nil {
-	// 		return reconcile.Result{}, err
-	// 	}
-	// }
+	// We don't care about update of cluster Service, so do nothing here
 	return reconcile.Result{}, nil
 }
