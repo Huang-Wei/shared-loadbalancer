@@ -57,7 +57,7 @@ type LBProvider interface {
 
 	// TODO(Huang-Wei): can be removed and implement in utils.go
 	// and rename to "UpdateServiceExternalIP"
-	UpdateService(svc, lb *corev1.Service) bool
+	UpdateService(svc, lb *corev1.Service) (portUpdated, externalIPUpdated bool)
 }
 
 type nameSet map[types.NamespacedName]struct{}

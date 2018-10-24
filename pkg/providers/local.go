@@ -122,7 +122,7 @@ func (l *Local) DeassociateLB(crd types.NamespacedName) error {
 	return nil
 }
 
-func (l *Local) UpdateService(svc, lb *corev1.Service) bool {
+func (l *Local) UpdateService(svc, lb *corev1.Service) (bool, bool) {
 	// nothing to do with local provider here
-	return false
+	return false, false
 }

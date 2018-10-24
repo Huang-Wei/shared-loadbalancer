@@ -136,7 +136,27 @@ func (i *IKS) DeassociateLB(crd types.NamespacedName) error {
 	return nil
 }
 
-func (i *IKS) UpdateService(svc, lb *corev1.Service) bool {
+func (i *IKS) UpdateService(svc, lb *corev1.Service) (bool, bool) {
+	portUpdated := updatePort(svc, lb)
+	externalIPUpdated := updateExternalIP(svc, lb)
+	return portUpdated, externalIPUpdated
+}
+
+// TODO(Huang-Wei): ensure port is not duplicated
+func updatePort(svc, lb *corev1.Service) bool {
+	updated := false
+	// check if svc doesn't carry port info
+	for i, svcPort := range svc.Spec.Ports {
+		if svcPort.Port != 0 {
+			continue
+		}
+		svc.Spec.Ports[i].Port = GetRandomPort()
+		updated = true
+	}
+	return updated
+}
+
+func updateExternalIP(svc, lb *corev1.Service) bool {
 	if len(lb.Status.LoadBalancer.Ingress) != 1 {
 		log.Info("No ingress info in lb.Status.LoadBalancer. Skip.")
 		return false

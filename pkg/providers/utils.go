@@ -52,3 +52,13 @@ func GetNamespacedName(svc *corev1.Service) types.NamespacedName {
 	}
 	return types.NamespacedName{Name: svc.Name, Namespace: svc.Namespace}
 }
+
+// GetRandomInt returns an integer in range [min, max)
+func GetRandomInt(min, max int) int {
+	return rand.Intn(max-min) + min
+}
+
+func GetRandomPort() int32 {
+	// TODO(Huang-Wei): change to [1000, 65535)?
+	return int32(GetRandomInt(1000, 10000))
+}

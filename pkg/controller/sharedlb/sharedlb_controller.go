@@ -142,11 +142,6 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 	err := r.Get(context.TODO(), request.NamespacedName, lbSvc)
 	if err == nil {
 		log.Info("LB is created/updated. Updating LB cache.", "name", request.Name)
-		// TODO(Huang-Wei):
-		// 1. return cr ns/name pairs from UpdateCache
-		// 2. iterate each cr item, if its ref is inconsistent with its loadbalancer
-		// 2.1. then update the cr item
-		// 2.2. get Service, call `UpdateService`, if returned true, update Service as well
 		r.provider.UpdateCache(request.NamespacedName, lbSvc)
 		return reconcile.Result{}, nil
 	} else if errors.IsNotFound(err) && strings.Index(request.Name, "lb-") == 0 {
@@ -208,16 +203,22 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 			return reconcile.Result{RequeueAfter: time.Second * 1}, err
 		}
 
-		// it's reusing a LB, so availableLB is expected to carry loadbalancer info
-		r.provider.UpdateService(clusterSvc, availableLB)
+		// Till this point, we're reusing a LoadBalancer
+		// i.e. availableLB is expected to carry loadbalancer info
+		// check if it's cr carries a port; if not, assign a random port
+		portUpdated, _ := r.provider.UpdateService(clusterSvc, availableLB)
 		err = r.Create(context.TODO(), clusterSvc)
 		if err != nil {
 			return reconcile.Result{}, err
 		}
 
-		// if it's not reusing a LB, availableLB doesn't carry loadbalancer info yet
+		// it's reusing a LB, so availableLB is expected to carry loadbalancer info
 		crObj.Status.Ref = lbNamespacedName.String()
 		crObj.Status.LoadBalancer = availableLB.Status.LoadBalancer
+		if portUpdated {
+			// seems don't need a DeepCopy
+			crObj.Spec.Ports = clusterSvc.Spec.Ports
+		}
 		err = r.Update(context.TODO(), crObj)
 		if err != nil {
 			return reconcile.Result{}, err
