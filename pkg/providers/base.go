@@ -25,7 +25,13 @@ import (
 )
 
 var log logr.Logger
-var svcPostfix = "-service"
+
+var (
+	svcPostfix = "-service"
+	// namespace that LoadBalancer service will be created in
+	// most probably it's the same value of the namespace that this binary runs in
+	namespace = GetEnvVal("NAMESPACE", "default")
+)
 
 func init() {
 	log = logf.Log.WithName("providers")
@@ -49,7 +55,7 @@ type LBProvider interface {
 	NewService(sharedLB *kubeconv1alpha1.SharedLB) *corev1.Service
 	NewLBService() *corev1.Service
 	GetAvailabelLB() *corev1.Service
-	AssociateLB(cr, lb types.NamespacedName) error
+	AssociateLB(cr, lb types.NamespacedName, clusterSvc *corev1.Service) error
 	DeassociateLB(cr types.NamespacedName) error
 	UpdateCache(key types.NamespacedName, val *corev1.Service)
 
@@ -61,3 +67,17 @@ type LBProvider interface {
 }
 
 type nameSet map[types.NamespacedName]struct{}
+
+// TODO(Huang-Wei): ensure port is not duplicated
+func updatePort(svc, lb *corev1.Service) bool {
+	updated := false
+	// check if svc doesn't carry port info
+	for i, svcPort := range svc.Spec.Ports {
+		if svcPort.Port != 0 {
+			continue
+		}
+		svc.Spec.Ports[i].Port = GetRandomPort()
+		updated = true
+	}
+	return updated
+}

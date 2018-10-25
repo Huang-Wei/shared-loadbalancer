@@ -167,7 +167,9 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 		return reconcile.Result{}, err
 	} else if crObj.Status.Ref != "" {
 		strs := strings.Split(crObj.Status.Ref, "/")
-		r.provider.AssociateLB(request.NamespacedName, types.NamespacedName{Namespace: strs[0], Name: strs[1]})
+		// TODO(Huang-Wei): seems it'd never run to here?
+		log.Info("==========IN WHICH CASE THIS RUNS?==========")
+		r.provider.AssociateLB(request.NamespacedName, types.NamespacedName{Namespace: strs[0], Name: strs[1]}, nil)
 	}
 
 	// Define the desired cluster Service object
@@ -198,18 +200,20 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 
 		log.Info("Reusing a LoadBalancer Service", "name", availableLB.Name)
 		lbNamespacedName := types.NamespacedName{Name: availableLB.Name, Namespace: availableLB.Namespace}
-		if err = r.provider.AssociateLB(request.NamespacedName, lbNamespacedName); err != nil {
-			// backoff a bit
-			return reconcile.Result{RequeueAfter: time.Second * 1}, err
-		}
-
-		// Till this point, we're reusing a LoadBalancer
+		// at this point, we can reuse a LoadBalancer
 		// i.e. availableLB is expected to carry loadbalancer info
-		// check if it's cr carries a port; if not, assign a random port
+		// check if this cr carries a port; if not, assign a random port
 		portUpdated, _ := r.provider.UpdateService(clusterSvc, availableLB)
 		err = r.Create(context.TODO(), clusterSvc)
 		if err != nil {
 			return reconcile.Result{}, err
+		}
+
+		// for EKS/GKE, need to get the NodePort from clusterSvc
+		// then it's able to proceed to add listener and handle firewall rules, etc.
+		if err = r.provider.AssociateLB(request.NamespacedName, lbNamespacedName, clusterSvc); err != nil {
+			// backoff a bit
+			return reconcile.Result{RequeueAfter: time.Second * 1}, err
 		}
 
 		// it's reusing a LB, so availableLB is expected to carry loadbalancer info

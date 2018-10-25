@@ -74,7 +74,7 @@ func (l *Local) NewLBService() *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "lb-" + RandStringRunes(8),
-			Namespace: "default",
+			Namespace: namespace,
 			Labels:    map[string]string{"lb-template": ""},
 		},
 		Spec: corev1.ServiceSpec{
@@ -98,7 +98,7 @@ func (l *Local) GetAvailabelLB() *corev1.Service {
 	return nil
 }
 
-func (l *Local) AssociateLB(crName, lbName types.NamespacedName) error {
+func (l *Local) AssociateLB(crName, lbName types.NamespacedName, _ *corev1.Service) error {
 	log.WithName("local").Info("AssociateLB", "cr", crName, "lb", lbName)
 	// if lb exists
 	if crs, ok := l.lbToCRs[lbName]; ok {

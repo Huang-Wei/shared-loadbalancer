@@ -54,11 +54,11 @@ func (i *IKS) GetCapacityPerLB() int {
 	return i.capacityPerLB
 }
 
-func (i *IKS) UpdateCache(key types.NamespacedName, val *corev1.Service) {
-	if val == nil {
+func (i *IKS) UpdateCache(key types.NamespacedName, lbSvc *corev1.Service) {
+	if lbSvc == nil {
 		delete(i.cacheMap, key)
 	} else {
-		i.cacheMap[key] = val
+		i.cacheMap[key] = lbSvc
 	}
 }
 
@@ -78,9 +78,8 @@ func (i *IKS) NewService(sharedLB *kubeconv1alpha1.SharedLB) *corev1.Service {
 func (i *IKS) NewLBService() *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "lb-" + RandStringRunes(8),
-			// TODO(Huang-Wei): should put namespace as sharedlb-mgmt-namespace
-			Namespace: "default",
+			Name:      "lb-" + RandStringRunes(8),
+			Namespace: namespace,
 			Labels:    map[string]string{"lb-template": ""},
 		},
 		Spec: corev1.ServiceSpec{
@@ -112,7 +111,7 @@ func (i *IKS) GetAvailabelLB() *corev1.Service {
 	return nil
 }
 
-func (i *IKS) AssociateLB(crName, lbName types.NamespacedName) error {
+func (i *IKS) AssociateLB(crName, lbName types.NamespacedName, _ *corev1.Service) error {
 	log.WithName("iks").Info("AssociateLB", "cr", crName, "lb", lbName)
 	// if lb exists
 	if crs, ok := i.lbToCRs[lbName]; ok {
@@ -126,12 +125,12 @@ func (i *IKS) AssociateLB(crName, lbName types.NamespacedName) error {
 	return nil
 }
 
-func (i *IKS) DeassociateLB(crd types.NamespacedName) error {
+func (i *IKS) DeassociateLB(crName types.NamespacedName) error {
 	// update cache
-	if lb, ok := i.crToLB[crd]; ok {
-		delete(i.crToLB, crd)
-		delete(i.lbToCRs[lb], crd)
-		log.WithName("iks").Info("DeassociateLB", "crd", crd, "lb", lb)
+	if lb, ok := i.crToLB[crName]; ok {
+		delete(i.crToLB, crName)
+		delete(i.lbToCRs[lb], crName)
+		log.WithName("iks").Info("DeassociateLB", "cr", crName, "lb", lb)
 	}
 	return nil
 }
@@ -140,20 +139,6 @@ func (i *IKS) UpdateService(svc, lb *corev1.Service) (bool, bool) {
 	portUpdated := updatePort(svc, lb)
 	externalIPUpdated := updateExternalIP(svc, lb)
 	return portUpdated, externalIPUpdated
-}
-
-// TODO(Huang-Wei): ensure port is not duplicated
-func updatePort(svc, lb *corev1.Service) bool {
-	updated := false
-	// check if svc doesn't carry port info
-	for i, svcPort := range svc.Spec.Ports {
-		if svcPort.Port != 0 {
-			continue
-		}
-		svc.Spec.Ports[i].Port = GetRandomPort()
-		updated = true
-	}
-	return updated
 }
 
 func updateExternalIP(svc, lb *corev1.Service) bool {
