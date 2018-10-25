@@ -164,9 +164,13 @@ func (e *EKS) AssociateLB(crName, lbName types.NamespacedName, clusterSvc *corev
 		if err := e.createInboundRules(clusterSvc, elbDesc); err != nil {
 			return err
 		}
+	} else {
+		return errors.New("ELB not exist yet")
 	}
 
 	// c) update internal cache
+	// following code might be called multiple times, but shouldn't impact
+	// performance a lot as all of them are O(1) operation
 	_, ok := e.lbToCRs[lbName]
 	if !ok {
 		e.lbToCRs[lbName] = make(nameSet)
@@ -186,10 +190,16 @@ func (e *EKS) DeassociateLB(crName types.NamespacedName) error {
 	// a) remove LoadBalancer listener (delete-load-balancer-listeners)
 	// b) remove inbound rules from security group (revoke-security-group-ingress)
 	if elbDesc := e.cacheELB[lbName]; elbDesc != nil {
-		// TODO(Huang-Wei): Oct 25, 2018
+		// TODO: we can't abtaint the clusterSvc, which has been deleted
+		// if err := e.removeListeners(clusterSvc, elbDesc); err != nil {
+		// 	return err
+		// }
+		// if err := e.removeInboundRules(clusterSvc, elbDesc); err != nil {
+		// 	return err
+		// }
 	}
 
-	// c) update cache
+	// c) update internal cache
 	delete(e.crToLB, crName)
 	delete(e.lbToCRs[lbName], crName)
 	log.WithName("eks").Info("DeassociateLB", "cr", crName, "lb", lbName)
@@ -198,6 +208,7 @@ func (e *EKS) DeassociateLB(crName types.NamespacedName) error {
 
 func (e *EKS) UpdateService(svc, lb *corev1.Service) (bool, bool) {
 	portUpdated := updatePort(svc, lb)
+	// don't need to update externalIP
 	return portUpdated, false
 }
 
@@ -273,6 +284,7 @@ func (e *EKS) createInboundRules(clusterSvc *corev1.Service, elbDesc *elb.LoadBa
 
 	input := &ec2.AuthorizeSecurityGroupIngressInput{
 		// pick up the first security group
+		// TODO(Huang-Wei): what if multiple security groups are found
 		GroupId:       sgStrs[0],
 		IpPermissions: ipPermissions,
 	}

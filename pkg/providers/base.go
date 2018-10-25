@@ -30,7 +30,8 @@ var (
 	svcPostfix = "-service"
 	// namespace that LoadBalancer service will be created in
 	// most probably it's the same value of the namespace that this binary runs in
-	namespace = GetEnvVal("NAMESPACE", "default")
+	namespace     = GetEnvVal("NAMESPACE", "default")
+	finalizerName = "sharedlb.finalizers.kubecon.k8s.io"
 )
 
 func init() {

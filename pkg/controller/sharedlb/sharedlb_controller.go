@@ -44,11 +44,6 @@ func init() {
 	log = logf.Log.WithName("slb_controller")
 }
 
-/**
-* USER ACTION REQUIRED: This is a scaffold file intended for the user to modify with their own Controller
-* business logic.  Delete these comments after modifying this file.*
- */
-
 // Add creates a new SharedLB Controller and adds it to the Manager with default RBAC. The Manager will set fields on the Controller
 // and Start it when the Manager is Started.
 // USER ACTION REQUIRED: update cmd/manager/main.go to call this kubecon.Add(mgr) to install this Controller
@@ -138,6 +133,7 @@ type ReconcileSharedLB struct {
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=kubecon.k8s.io,resources=sharedlbs,verbs=get;list;watch;create;update;patch;delete
 func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Result, error) {
+	// 1) fetch and deal with the LoadBalancer Service object
 	lbSvc := &corev1.Service{}
 	err := r.Get(context.TODO(), request.NamespacedName, lbSvc)
 	if err == nil {
@@ -145,20 +141,21 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 		r.provider.UpdateCache(request.NamespacedName, lbSvc)
 		return reconcile.Result{}, nil
 	} else if errors.IsNotFound(err) && strings.Index(request.Name, "lb-") == 0 {
+		// TODO(Huang-Wei): seems the "strings.Index" logic above is unnecessary
 		// lb service has been deleted (by external user)
 		log.Info("LB is deleted. Updating lb cache.", "name", request.Name)
 		r.provider.UpdateCache(request.NamespacedName, nil)
 		return reconcile.Result{}, nil
 	}
 
-	// Fetch the SharedLB CR object
+	// 2) fetch and deal with the SharedLB CR object
 	crObj := &kubeconv1alpha1.SharedLB{}
 	err = r.Get(context.TODO(), request.NamespacedName, crObj)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			// Object not found, return.  Created objects are automatically garbage collected.
 			// For additional cleanup logic use finalizers.
-			// TODO(Huang-Wei): use finalizers to do this
+			// TODO(Huang-Wei): use finalizers instead
 			// need to deassociate with the LoadBalancer service
 			r.provider.DeassociateLB(request.NamespacedName)
 			return reconcile.Result{}, nil
@@ -167,10 +164,18 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 		return reconcile.Result{}, err
 	} else if crObj.Status.Ref != "" {
 		strs := strings.Split(crObj.Status.Ref, "/")
-		// TODO(Huang-Wei): seems it'd never run to here?
-		log.Info("==========IN WHICH CASE THIS RUNS?==========")
-		r.provider.AssociateLB(request.NamespacedName, types.NamespacedName{Namespace: strs[0], Name: strs[1]}, nil)
+		if err := r.provider.AssociateLB(request.NamespacedName, types.NamespacedName{Namespace: strs[0], Name: strs[1]}, nil); err != nil {
+			// this err means corresponding Iaas Obj not exist yet
+			// so we re-enqueue with a little backoff
+			// this is possible in 2 cases:
+			// i)  cluster start phase: CR obj Add event comes before LB obj Add event
+			// ii) LB/IaaS obj created too slow
+			log.Info(err.Error())
+			return reconcile.Result{Requeue: true, RequeueAfter: time.Millisecond * 100}, nil
+		}
 	}
+
+	// 3) deal with the Cluster Service object
 
 	// Define the desired cluster Service object
 	clusterSvc := r.provider.NewService(crObj)

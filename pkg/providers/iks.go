@@ -17,6 +17,8 @@ limitations under the License.
 package providers
 
 import (
+	"errors"
+
 	kubeconv1alpha1 "github.com/Huang-Wei/shared-loadbalancer/pkg/apis/kubecon/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -112,16 +114,19 @@ func (i *IKS) GetAvailabelLB() *corev1.Service {
 }
 
 func (i *IKS) AssociateLB(crName, lbName types.NamespacedName, _ *corev1.Service) error {
-	log.WithName("iks").Info("AssociateLB", "cr", crName, "lb", lbName)
-	// if lb exists
-	if crs, ok := i.lbToCRs[lbName]; ok {
-		crs[crName] = struct{}{}
-		i.crToLB[crName] = lbName
-	} else {
-		i.lbToCRs[lbName] = make(nameSet)
-		i.lbToCRs[lbName][crName] = struct{}{}
-		i.crToLB[crName] = lbName
+	if lbSvc, ok := i.cacheMap[lbName]; !ok || len(lbSvc.Status.LoadBalancer.Ingress) == 0 {
+		return errors.New("LoadBalancer service not exist yet")
 	}
+
+	// following code might be called multiple times, but shouldn't impact
+	// performance a lot as all of them are O(1) operation
+	_, ok := i.lbToCRs[lbName]
+	if !ok {
+		i.lbToCRs[lbName] = make(nameSet)
+	}
+	i.lbToCRs[lbName][crName] = struct{}{}
+	i.crToLB[crName] = lbName
+	log.WithName("iks").Info("AssociateLB", "cr", crName, "lb", lbName)
 	return nil
 }
 
