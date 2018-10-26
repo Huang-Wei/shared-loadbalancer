@@ -176,7 +176,6 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 	}
 
 	// 3) deal with the Cluster Service object
-
 	// Define the desired cluster Service object
 	clusterSvc := r.provider.NewService(crObj)
 	if err := controllerutil.SetControllerReference(crObj, clusterSvc, r.scheme); err != nil {
@@ -200,7 +199,8 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 			}
 			log.Info("A real LB is created", "name", availableLB.Name, "lbinfo", availableLB.Status.LoadBalancer)
 			// NOTE: here we directly return to start a new reconcile
-			return reconcile.Result{Requeue: true, RequeueAfter: time.Millisecond * 200}, nil
+			// return reconcile.Result{Requeue: true, RequeueAfter: time.Millisecond * 200}, nil
+			return reconcile.Result{Requeue: true, RequeueAfter: time.Second * 10}, nil
 		}
 
 		log.Info("Reusing a LoadBalancer Service", "name", availableLB.Name)

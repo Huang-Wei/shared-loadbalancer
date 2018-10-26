@@ -113,9 +113,11 @@ func (i *IKS) GetAvailabelLB() *corev1.Service {
 	return nil
 }
 
-func (i *IKS) AssociateLB(crName, lbName types.NamespacedName, _ *corev1.Service) error {
-	if lbSvc, ok := i.cacheMap[lbName]; !ok || len(lbSvc.Status.LoadBalancer.Ingress) == 0 {
-		return errors.New("LoadBalancer service not exist yet")
+func (i *IKS) AssociateLB(crName, lbName types.NamespacedName, clusterSvc *corev1.Service) error {
+	if clusterSvc != nil {
+		if lbSvc, ok := i.cacheMap[lbName]; !ok || len(lbSvc.Status.LoadBalancer.Ingress) == 0 {
+			return errors.New("LoadBalancer service not exist yet")
+		}
 	}
 
 	// following code might be called multiple times, but shouldn't impact

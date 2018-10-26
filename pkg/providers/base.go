@@ -45,6 +45,8 @@ func NewProvider() LBProvider {
 	switch providerStr {
 	case "iks":
 		provider = newIKSProvider()
+	case "eks":
+		provider = newEKSProvider()
 	case "local":
 		provider = newLocalProvider()
 	}

@@ -96,7 +96,7 @@ func (e *EKS) UpdateCache(key types.NamespacedName, lbSvc *corev1.Service) {
 			if result, err := e.queryELB(elbName); err != nil {
 				log.WithName("eks").Error(err, "cannot query ELB", "key", key, "elbName", elbName)
 			} else {
-				log.WithName("eks").Info("A LB Svc is updated", "key", key, "elbName", elbName)
+				log.WithName("eks").Info("ELB obj is updated in local cache", "key", key, "elbName", elbName)
 				e.cacheELB[key] = result
 			}
 		}
@@ -110,7 +110,7 @@ func (e *EKS) NewService(sharedLB *kubeconv1alpha1.SharedLB) *corev1.Service {
 			Namespace: sharedLB.Namespace,
 		},
 		Spec: corev1.ServiceSpec{
-			// TODO(Huang-Wei): NodePort is best solution we can come up with so far
+			// TODO(Huang-Wei): NodePort is the solution we can come up with so far
 			Type:     corev1.ServiceTypeNodePort,
 			Ports:    sharedLB.Spec.Ports,
 			Selector: sharedLB.Spec.Selector,
@@ -157,15 +157,21 @@ func (e *EKS) GetAvailabelLB() *corev1.Service {
 func (e *EKS) AssociateLB(crName, lbName types.NamespacedName, clusterSvc *corev1.Service) error {
 	// a) create LoadBalancer listener (create-load-balancer-listeners)
 	// b) create inbound rules to security group (authorize-security-group-ingress)
-	if elbDesc := e.cacheELB[lbName]; elbDesc != nil {
-		if err := e.createListeners(clusterSvc, elbDesc); err != nil {
-			return err
+	if clusterSvc != nil {
+		if elbDesc := e.cacheELB[lbName]; elbDesc != nil {
+			needRun, err := e.createListeners(clusterSvc, elbDesc)
+			if err != nil {
+				return err
+			}
+			if !needRun {
+				return nil
+			}
+			if err := e.createInboundRules(clusterSvc, elbDesc); err != nil {
+				return err
+			}
+		} else {
+			return errors.New("ELB not exist yet")
 		}
-		if err := e.createInboundRules(clusterSvc, elbDesc); err != nil {
-			return err
-		}
-	} else {
-		return errors.New("ELB not exist yet")
 	}
 
 	// c) update internal cache
@@ -231,12 +237,12 @@ func (e *EKS) queryELB(elbName string) (*elb.LoadBalancerDescription, error) {
 	return result.LoadBalancerDescriptions[0], nil
 }
 
-func (e *EKS) createListeners(clusterSvc *corev1.Service, elbDesc *elb.LoadBalancerDescription) error {
+func (e *EKS) createListeners(clusterSvc *corev1.Service, elbDesc *elb.LoadBalancerDescription) (bool, error) {
 	if clusterSvc == nil || elbDesc == nil {
-		return errors.New("clusterSvc or elbDesc is nil")
+		return false, errors.New("clusterSvc or elbDesc is nil")
 	}
-	listeners := make([]*elb.Listener, len(clusterSvc.Spec.Ports))
-	for i, p := range clusterSvc.Spec.Ports {
+	listeners := make([]*elb.Listener, 0)
+	for _, p := range clusterSvc.Spec.Ports {
 		lowercasedProtocol := strings.ToLower(string(p.Protocol))
 		listener := elb.Listener{
 			InstancePort:     aws.Int64(int64(p.NodePort)),
@@ -245,14 +251,33 @@ func (e *EKS) createListeners(clusterSvc *corev1.Service, elbDesc *elb.LoadBalan
 			Protocol:         aws.String(lowercasedProtocol),
 			// TODO(Huang-Wei): InstanceProtocol vs. Protocol?
 		}
-		listeners[i] = &listener
+		// check if it exists in elbDesc
+		if isListenerExisted(listener, elbDesc.ListenerDescriptions) {
+			continue
+		}
+		listeners = append(listeners, &listener)
 	}
+	if len(listeners) == 0 {
+		return false, nil
+	}
+
 	input := &elb.CreateLoadBalancerListenersInput{
 		Listeners:        listeners,
 		LoadBalancerName: elbDesc.LoadBalancerName,
 	}
 	_, err := e.elbClient.CreateLoadBalancerListeners(input)
-	return err
+	return true, err
+}
+
+func isListenerExisted(l elb.Listener, listenerDescs []*elb.ListenerDescription) bool {
+	for _, desc := range listenerDescs {
+		e := desc.Listener
+		if *l.InstancePort == *e.InstancePort && *l.InstanceProtocol == *e.InstanceProtocol &&
+			*l.LoadBalancerPort == *e.LoadBalancerPort && *l.Protocol == *e.Protocol {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *EKS) createInboundRules(clusterSvc *corev1.Service, elbDesc *elb.LoadBalancerDescription) error {
@@ -265,8 +290,8 @@ func (e *EKS) createInboundRules(clusterSvc *corev1.Service, elbDesc *elb.LoadBa
 		return errors.New("no security group is attached to the ELB")
 	}
 
-	ipPermissions := make([]*ec2.IpPermission, len(clusterSvc.Spec.Ports))
-	for i, p := range clusterSvc.Spec.Ports {
+	ipPermissions := make([]*ec2.IpPermission, 0)
+	for _, p := range clusterSvc.Spec.Ports {
 		lowercasedProtocol := strings.ToLower(string(p.Protocol))
 		permission := ec2.IpPermission{
 			FromPort:   aws.Int64(int64(p.Port)),
@@ -279,7 +304,10 @@ func (e *EKS) createInboundRules(clusterSvc *corev1.Service, elbDesc *elb.LoadBa
 			},
 			ToPort: aws.Int64(int64(p.Port)),
 		}
-		ipPermissions[i] = &permission
+		ipPermissions = append(ipPermissions, &permission)
+	}
+	if len(ipPermissions) == 0 {
+		return nil
 	}
 
 	input := &ec2.AuthorizeSecurityGroupIngressInput{
