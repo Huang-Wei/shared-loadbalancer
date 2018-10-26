@@ -157,7 +157,7 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 		}
 		return reconcile.Result{}, nil
 	} else if errors.IsNotFound(err) && strings.Index(request.Name, "lb-") == 0 {
-		// TODO(Huang-Wei): seems the "strings.Index" logic above is unnecessary
+		// TODO(Huang-Wei): improve logic to not check it's a LB service or CR obj by string
 		// lb service has been deleted (by external user)
 		log.Info("LB is deleted. Updating lb cache.", "name", request.Name)
 		r.provider.UpdateCache(request.NamespacedName, nil)
@@ -168,7 +168,7 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 	// we rely on an internal struct "pendingQ" to tell whether incoming CR obj should
 	// a) be put back to queue or b) be processed instantly
 	if r.pendingQ.hasCR(request.NamespacedName) {
-		log.Info("It's likely dependent IaaS LoadBalancer is pending. Wait for 1 second and retry.")
+		log.Info("It's likely dependent IaaS LoadBalancer is pending. Wait for 1 second and retry.", "request", request.NamespacedName)
 		// TODO(Huang-Wei): implement exponential backoff
 		return reconcile.Result{Requeue: true, RequeueAfter: time.Second * 1}, nil
 	}
@@ -275,7 +275,7 @@ func (idxMap *crLBIdxMap) add(crName, lbName types.NamespacedName) {
 }
 
 func (idxMap *crLBIdxMap) remove(lbName types.NamespacedName) {
-	for cr := range idxMap.lbToCRs {
+	for cr := range idxMap.lbToCRs[lbName] {
 		delete(idxMap.crToLB, cr)
 	}
 	delete(idxMap.lbToCRs, lbName)
