@@ -47,7 +47,7 @@ func newLocalProvider() *Local {
 		cacheMap:      make(map[types.NamespacedName]*corev1.Service),
 		crToLB:        make(map[types.NamespacedName]types.NamespacedName),
 		lbToCRs:       make(map[types.NamespacedName]nameSet),
-		capacityPerLB: 3,
+		capacityPerLB: capacity,
 	}
 }
 

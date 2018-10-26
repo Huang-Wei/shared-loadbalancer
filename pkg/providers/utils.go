@@ -19,6 +19,7 @@ package providers
 import (
 	"math/rand"
 	"os"
+	"strconv"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -39,11 +40,23 @@ func RandStringRunes(n int) string {
 	return string(b)
 }
 
-func GetEnvVal(envKey, defVal string) string {
+func GetEnvVal(envKey, defaultVal string) string {
 	if val := os.Getenv(envKey); val != "" {
 		return val
 	}
-	return defVal
+	return defaultVal
+}
+
+func GetEnvValInt(envKey string, defaultVal int) int {
+	val := os.Getenv(envKey)
+	if val == "" {
+		return defaultVal
+	}
+	retVal, err := strconv.Atoi(val)
+	if err != nil {
+		return defaultVal
+	}
+	return retVal
 }
 
 func GetNamespacedName(svc *corev1.Service) types.NamespacedName {

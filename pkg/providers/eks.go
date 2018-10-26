@@ -75,7 +75,7 @@ func newEKSProvider() *EKS {
 		cacheELB:      make(map[types.NamespacedName]*elb.LoadBalancerDescription),
 		crToLB:        make(map[types.NamespacedName]types.NamespacedName),
 		lbToCRs:       make(map[types.NamespacedName]nameSet),
-		capacityPerLB: 2,
+		capacityPerLB: capacity,
 	}
 }
 

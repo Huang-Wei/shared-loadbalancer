@@ -48,7 +48,7 @@ func newIKSProvider() *IKS {
 		cacheMap:      make(map[types.NamespacedName]*corev1.Service),
 		crToLB:        make(map[types.NamespacedName]types.NamespacedName),
 		lbToCRs:       make(map[types.NamespacedName]nameSet),
-		capacityPerLB: 2,
+		capacityPerLB: capacity,
 	}
 }
 
