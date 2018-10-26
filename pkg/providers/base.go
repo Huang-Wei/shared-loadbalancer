@@ -38,6 +38,8 @@ var (
 	finalizerName = "sharedlb.finalizers.kubecon.k8s.io"
 )
 
+type nameSet map[types.NamespacedName]struct{}
+
 func init() {
 	log = logf.Log.WithName("providers")
 }
@@ -72,8 +74,6 @@ type LBProvider interface {
 	// and rename to "UpdateServiceExternalIP"
 	UpdateService(svc, lb *corev1.Service) (portUpdated, externalIPUpdated bool)
 }
-
-type nameSet map[types.NamespacedName]struct{}
 
 // TODO(Huang-Wei): ensure port is not duplicated
 func updatePort(svc, lb *corev1.Service) bool {

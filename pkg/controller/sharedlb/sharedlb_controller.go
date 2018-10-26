@@ -57,6 +57,10 @@ func newReconciler(mgr manager.Manager) reconcile.Reconciler {
 		Client:   mgr.GetClient(),
 		scheme:   mgr.GetScheme(),
 		provider: providers.NewProvider(),
+		pendingQ: &crLBIdxMap{
+			crToLB:  make(map[types.NamespacedName]types.NamespacedName),
+			lbToCRs: make(map[types.NamespacedName]nameSet),
+		},
 	}
 }
 
@@ -123,6 +127,14 @@ type ReconcileSharedLB struct {
 	client.Client
 	scheme   *runtime.Scheme
 	provider providers.LBProvider
+	pendingQ *crLBIdxMap
+}
+
+type nameSet map[types.NamespacedName]struct{}
+
+type crLBIdxMap struct {
+	crToLB  map[types.NamespacedName]types.NamespacedName
+	lbToCRs map[types.NamespacedName]nameSet
 }
 
 // Reconcile reads that state of the cluster for a SharedLB object and makes changes based on the state read
@@ -139,6 +151,10 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 	if err == nil {
 		log.Info("LB is created/updated. Updating LB cache.", "name", request.Name)
 		r.provider.UpdateCache(request.NamespacedName, lbSvc)
+		if r.pendingQ.hasLB(request.NamespacedName) && len(lbSvc.Status.LoadBalancer.Ingress) > 0 {
+			log.Info("LB has completed setup. Removing lb entry in pendingQ.")
+			r.pendingQ.remove(request.NamespacedName)
+		}
 		return reconcile.Result{}, nil
 	} else if errors.IsNotFound(err) && strings.Index(request.Name, "lb-") == 0 {
 		// TODO(Huang-Wei): seems the "strings.Index" logic above is unnecessary
@@ -146,6 +162,15 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 		log.Info("LB is deleted. Updating lb cache.", "name", request.Name)
 		r.provider.UpdateCache(request.NamespacedName, nil)
 		return reconcile.Result{}, nil
+	}
+
+	// in some cases, esp. when CR obj is created but LoadBalancer service is pending
+	// we rely on an internal struct "pendingQ" to tell whether incoming CR obj should
+	// a) be put back to queue or b) be processed instantly
+	if r.pendingQ.hasCR(request.NamespacedName) {
+		log.Info("It's likely dependent IaaS LoadBalancer is pending. Wait for 1 second and retry.")
+		// TODO(Huang-Wei): implement exponential backoff
+		return reconcile.Result{Requeue: true, RequeueAfter: time.Second * 1}, nil
 	}
 
 	// 2) fetch and deal with the SharedLB CR object
@@ -200,7 +225,8 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 			log.Info("A real LB is created", "name", availableLB.Name, "lbinfo", availableLB.Status.LoadBalancer)
 			// NOTE: here we directly return to start a new reconcile
 			// return reconcile.Result{Requeue: true, RequeueAfter: time.Millisecond * 200}, nil
-			return reconcile.Result{Requeue: true, RequeueAfter: time.Second * 10}, nil
+			r.pendingQ.add(request.NamespacedName, types.NamespacedName{Name: availableLB.Name, Namespace: availableLB.Namespace})
+			return reconcile.Result{Requeue: true, RequeueAfter: time.Millisecond * 500}, nil
 		}
 
 		log.Info("Reusing a LoadBalancer Service", "name", availableLB.Name)
@@ -238,4 +264,28 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 
 	// We don't care about update of cluster Service, so do nothing here
 	return reconcile.Result{}, nil
+}
+
+func (idxMap *crLBIdxMap) add(crName, lbName types.NamespacedName) {
+	idxMap.crToLB[crName] = lbName
+	if idxMap.lbToCRs[lbName] == nil {
+		idxMap.lbToCRs[lbName] = make(nameSet)
+	}
+	idxMap.lbToCRs[lbName][crName] = struct{}{}
+}
+
+func (idxMap *crLBIdxMap) remove(lbName types.NamespacedName) {
+	for cr := range idxMap.lbToCRs {
+		delete(idxMap.crToLB, cr)
+	}
+	delete(idxMap.lbToCRs, lbName)
+}
+
+func (idxMap *crLBIdxMap) hasCR(crName types.NamespacedName) bool {
+	_, ok := idxMap.crToLB[crName]
+	return ok
+}
+
+func (idxMap *crLBIdxMap) hasLB(lbName types.NamespacedName) bool {
+	return len(idxMap.lbToCRs[lbName]) != 0
 }
