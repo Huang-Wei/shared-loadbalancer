@@ -126,6 +126,8 @@ func (e *EKS) NewLBService() *corev1.Service {
 			Labels:    map[string]string{"lb-template": ""},
 		},
 		Spec: corev1.ServiceSpec{
+			Type:     corev1.ServiceTypeLoadBalancer,
+			Selector: map[string]string{"app": "lb-placeholder"},
 			Ports: []corev1.ServicePort{
 				{
 					Name:     "tcp",
@@ -139,7 +141,6 @@ func (e *EKS) NewLBService() *corev1.Service {
 				// 	Port:     33333,
 				// },
 			},
-			Type: corev1.ServiceTypeLoadBalancer,
 		},
 	}
 }
