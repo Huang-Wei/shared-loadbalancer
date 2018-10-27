@@ -67,7 +67,7 @@ func (i *IKS) UpdateCache(key types.NamespacedName, lbSvc *corev1.Service) {
 func (i *IKS) NewService(sharedLB *kubeconv1alpha1.SharedLB) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      sharedLB.Name + svcPostfix,
+			Name:      sharedLB.Name + SvcPostfix,
 			Namespace: sharedLB.Namespace,
 		},
 		Spec: corev1.ServiceSpec{
@@ -134,7 +134,7 @@ func (i *IKS) AssociateLB(crName, lbName types.NamespacedName, clusterSvc *corev
 
 // DeassociateLB is called by IKS finalizer to clean internal cache
 // no IaaS things should be done for IKS
-func (i *IKS) DeassociateLB(crName types.NamespacedName) error {
+func (i *IKS) DeassociateLB(crName types.NamespacedName, _ *corev1.Service) error {
 	// update cache
 	if lb, ok := i.crToLB[crName]; ok {
 		delete(i.crToLB, crName)

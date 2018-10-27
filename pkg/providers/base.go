@@ -28,7 +28,7 @@ var log logr.Logger
 
 var (
 	// svcPostfix is the stringa appended to cluster service object
-	svcPostfix = "-service"
+	SvcPostfix = "-service"
 	// namespace that LoadBalancer service will be created in
 	// most probably it's the same value of the namespace that this binary runs in
 	namespace = GetEnvVal("NAMESPACE", "default")
@@ -65,7 +65,7 @@ type LBProvider interface {
 	NewLBService() *corev1.Service
 	GetAvailabelLB() *corev1.Service
 	AssociateLB(cr, lb types.NamespacedName, clusterSvc *corev1.Service) error
-	DeassociateLB(cr types.NamespacedName) error
+	DeassociateLB(cr types.NamespacedName, clusterSvc *corev1.Service) error
 	UpdateCache(key types.NamespacedName, val *corev1.Service)
 
 	GetCapacityPerLB() int

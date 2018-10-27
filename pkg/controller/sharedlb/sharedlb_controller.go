@@ -202,10 +202,17 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 		}
 	} else {
 		if containsString(crObj.ObjectMeta.Finalizers, providers.FinalizerName) {
-			err := r.provider.DeassociateLB(request.NamespacedName)
-			if err != nil {
-				// fail to delete the external dependency here, return with error
+			// clusterSvc := r.provider.NewService(crObj)
+			clusterSvc := &corev1.Service{}
+			clusterSvcNsName := types.NamespacedName{Name: crObj.Name + providers.SvcPostfix, Namespace: crObj.Namespace}
+			if err = r.Get(context.TODO(), clusterSvcNsName, clusterSvc); err != nil {
+				log.Error(err, "fail to get clusterSvc when trying DeassociateLB")
+				return reconcile.Result{}, err
+			}
+			if err := r.provider.DeassociateLB(request.NamespacedName, clusterSvc); err != nil {
+				// fail to delete external dependencies here, return with error
 				// so that it can be retried
+				log.Error(err, "fail to delete external dependencies when trying DeassociateLB")
 				return reconcile.Result{}, err
 			}
 			// remove our finalizer from the list and update it.

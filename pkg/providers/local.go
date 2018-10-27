@@ -62,7 +62,7 @@ func (l *Local) UpdateCache(key types.NamespacedName, val *corev1.Service) {
 func (l *Local) NewService(sharedLB *kubeconv1alpha1.SharedLB) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      sharedLB.Name + "-service",
+			Name:      sharedLB.Name + SvcPostfix,
 			Namespace: sharedLB.Namespace,
 		},
 		Spec: corev1.ServiceSpec{
@@ -117,7 +117,7 @@ func (l *Local) AssociateLB(crName, lbName types.NamespacedName, _ *corev1.Servi
 	return nil
 }
 
-func (l *Local) DeassociateLB(crd types.NamespacedName) error {
+func (l *Local) DeassociateLB(crd types.NamespacedName, _ *corev1.Service) error {
 	// update cache
 	if lb, ok := l.crToLB[crd]; ok {
 		delete(l.crToLB, crd)
