@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lb-placeholder
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lb-placeholder
+  template:
+    metadata:
+      labels:
+        app: lb-placeholder
+    spec:
+      containers:
+      - name: lb-placeholder
+        image: hweicdl/netcat-tcp:v0.1.0
+        command: ["nc"]
+        args: ["-kl", "33333"] # no verbose
+        ports:
+        - containerPort: 33333

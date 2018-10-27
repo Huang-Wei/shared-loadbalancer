@@ -44,11 +44,6 @@ func init() {
 	log = logf.Log.WithName("slb_controller")
 }
 
-/**
-* USER ACTION REQUIRED: This is a scaffold file intended for the user to modify with their own Controller
-* business logic.  Delete these comments after modifying this file.*
- */
-
 // Add creates a new SharedLB Controller and adds it to the Manager with default RBAC. The Manager will set fields on the Controller
 // and Start it when the Manager is Started.
 // USER ACTION REQUIRED: update cmd/manager/main.go to call this kubecon.Add(mgr) to install this Controller
@@ -62,6 +57,10 @@ func newReconciler(mgr manager.Manager) reconcile.Reconciler {
 		Client:   mgr.GetClient(),
 		scheme:   mgr.GetScheme(),
 		provider: providers.NewProvider(),
+		pendingQ: &crLBIdxMap{
+			crToLB:  make(map[types.NamespacedName]types.NamespacedName),
+			lbToCRs: make(map[types.NamespacedName]nameSet),
+		},
 	}
 }
 
@@ -128,6 +127,14 @@ type ReconcileSharedLB struct {
 	client.Client
 	scheme   *runtime.Scheme
 	provider providers.LBProvider
+	pendingQ *crLBIdxMap
+}
+
+type nameSet map[types.NamespacedName]struct{}
+
+type crLBIdxMap struct {
+	crToLB  map[types.NamespacedName]types.NamespacedName
+	lbToCRs map[types.NamespacedName]nameSet
 }
 
 // Reconcile reads that state of the cluster for a SharedLB object and makes changes based on the state read
@@ -138,38 +145,101 @@ type ReconcileSharedLB struct {
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=kubecon.k8s.io,resources=sharedlbs,verbs=get;list;watch;create;update;patch;delete
 func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Result, error) {
+	// 1) fetch and deal with the LoadBalancer Service object
 	lbSvc := &corev1.Service{}
 	err := r.Get(context.TODO(), request.NamespacedName, lbSvc)
 	if err == nil {
 		log.Info("LB is created/updated. Updating LB cache.", "name", request.Name)
 		r.provider.UpdateCache(request.NamespacedName, lbSvc)
+		if r.pendingQ.hasLB(request.NamespacedName) && len(lbSvc.Status.LoadBalancer.Ingress) > 0 {
+			log.Info("LB has completed setup. Removing lb entry in pendingQ.")
+			r.pendingQ.remove(request.NamespacedName)
+		}
 		return reconcile.Result{}, nil
 	} else if errors.IsNotFound(err) && strings.Index(request.Name, "lb-") == 0 {
+		// TODO(Huang-Wei): improve logic to not check it's a LB service or CR obj by string
+		// use finalizer?
 		// lb service has been deleted (by external user)
 		log.Info("LB is deleted. Updating lb cache.", "name", request.Name)
 		r.provider.UpdateCache(request.NamespacedName, nil)
 		return reconcile.Result{}, nil
 	}
 
-	// Fetch the SharedLB CR object
+	// in some cases, esp. when CR obj is created but LoadBalancer service is pending
+	// we rely on an internal struct "pendingQ" to tell whether incoming CR obj should
+	// a) be put back to queue or b) be processed instantly
+	if r.pendingQ.hasCR(request.NamespacedName) {
+		log.Info("It's likely dependent IaaS LoadBalancer is pending. Wait for 1 second and retry.", "request", request.NamespacedName)
+		// TODO(Huang-Wei): implement exponential backoff
+		return reconcile.Result{Requeue: true, RequeueAfter: time.Second * 1}, nil
+	}
+
+	// 2) fetch and deal with the SharedLB CR object
 	crObj := &kubeconv1alpha1.SharedLB{}
 	err = r.Get(context.TODO(), request.NamespacedName, crObj)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			// Object not found, return.  Created objects are automatically garbage collected.
 			// For additional cleanup logic use finalizers.
-			// TODO(Huang-Wei): use finalizers to do this
-			// need to deassociate with the LoadBalancer service
-			r.provider.DeassociateLB(request.NamespacedName)
 			return reconcile.Result{}, nil
 		}
 		// Error reading the object - requeue the request.
 		return reconcile.Result{}, err
-	} else if crObj.Status.Ref != "" {
-		strs := strings.Split(crObj.Status.Ref, "/")
-		r.provider.AssociateLB(request.NamespacedName, types.NamespacedName{Namespace: strs[0], Name: strs[1]})
 	}
 
+	// apply or deal with finalizer
+	if crObj.ObjectMeta.DeletionTimestamp.IsZero() {
+		// The CR object is not being deleted, so if it does not have desired finalizer,
+		// add the finalizer and update the object.
+		if !containsString(crObj.ObjectMeta.Finalizers, providers.FinalizerName) {
+			crObj.ObjectMeta.Finalizers = append(crObj.ObjectMeta.Finalizers, providers.FinalizerName)
+			// if err := r.Update(context.Background(), crObj); err != nil {
+			// 	return reconcile.Result{Requeue: true}, nil
+			// }
+			err := r.Update(context.Background(), crObj)
+			// requeue if err != nil; otherwise we're done
+			return reconcile.Result{Requeue: err != nil}, nil
+		}
+	} else {
+		if containsString(crObj.ObjectMeta.Finalizers, providers.FinalizerName) {
+			// clusterSvc := r.provider.NewService(crObj)
+			clusterSvc := &corev1.Service{}
+			clusterSvcNsName := types.NamespacedName{Name: crObj.Name + providers.SvcPostfix, Namespace: crObj.Namespace}
+			if err = r.Get(context.TODO(), clusterSvcNsName, clusterSvc); err != nil {
+				log.Error(err, "fail to get clusterSvc when trying DeassociateLB")
+				return reconcile.Result{}, err
+			}
+			if err := r.provider.DeassociateLB(request.NamespacedName, clusterSvc); err != nil {
+				// fail to delete external dependencies here, return with error
+				// so that it can be retried
+				log.Error(err, "fail to delete external dependencies when trying DeassociateLB")
+				return reconcile.Result{}, err
+			}
+			// remove our finalizer from the list and update it.
+			crObj.ObjectMeta.Finalizers = removeString(crObj.ObjectMeta.Finalizers, providers.FinalizerName)
+			// if err := r.Update(context.Background(), crObj); err != nil {
+			// 	return reconcile.Result{Requeue: true}, nil
+			// }
+			err = r.Update(context.Background(), crObj)
+			// requeue if err != nil; otherwise we're done
+			return reconcile.Result{Requeue: err != nil}, nil
+		}
+	}
+
+	if crObj.Status.Ref != "" {
+		strs := strings.Split(crObj.Status.Ref, "/")
+		if err := r.provider.AssociateLB(request.NamespacedName, types.NamespacedName{Namespace: strs[0], Name: strs[1]}, nil); err != nil {
+			// this err means corresponding Iaas Obj not exist yet
+			// so we re-enqueue with a little backoff
+			// this is possible in 2 cases:
+			// i)  cluster start phase: CR obj Add event comes before LB obj Add event
+			// ii) LB/IaaS obj created too slow
+			log.Info(err.Error())
+			return reconcile.Result{Requeue: true, RequeueAfter: time.Millisecond * 100}, nil
+		}
+	}
+
+	// 3) deal with the Cluster Service object
 	// Define the desired cluster Service object
 	clusterSvc := r.provider.NewService(crObj)
 	if err := controllerutil.SetControllerReference(crObj, clusterSvc, r.scheme); err != nil {
@@ -193,23 +263,27 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 			}
 			log.Info("A real LB is created", "name", availableLB.Name, "lbinfo", availableLB.Status.LoadBalancer)
 			// NOTE: here we directly return to start a new reconcile
-			return reconcile.Result{Requeue: true, RequeueAfter: time.Millisecond * 200}, nil
+			// return reconcile.Result{Requeue: true, RequeueAfter: time.Millisecond * 200}, nil
+			r.pendingQ.add(request.NamespacedName, types.NamespacedName{Name: availableLB.Name, Namespace: availableLB.Namespace})
+			return reconcile.Result{Requeue: true, RequeueAfter: time.Millisecond * 500}, nil
 		}
 
 		log.Info("Reusing a LoadBalancer Service", "name", availableLB.Name)
 		lbNamespacedName := types.NamespacedName{Name: availableLB.Name, Namespace: availableLB.Namespace}
-		if err = r.provider.AssociateLB(request.NamespacedName, lbNamespacedName); err != nil {
-			// backoff a bit
-			return reconcile.Result{RequeueAfter: time.Second * 1}, err
-		}
-
-		// Till this point, we're reusing a LoadBalancer
+		// at this point, we can reuse a LoadBalancer
 		// i.e. availableLB is expected to carry loadbalancer info
-		// check if it's cr carries a port; if not, assign a random port
+		// check if this cr carries a port; if not, assign a random port
 		portUpdated, _ := r.provider.UpdateService(clusterSvc, availableLB)
 		err = r.Create(context.TODO(), clusterSvc)
 		if err != nil {
 			return reconcile.Result{}, err
+		}
+
+		// for EKS/GKE, need to get the NodePort from clusterSvc
+		// then it's able to proceed to add listener and handle firewall rules, etc.
+		if err = r.provider.AssociateLB(request.NamespacedName, lbNamespacedName, clusterSvc); err != nil {
+			// backoff a bit
+			return reconcile.Result{RequeueAfter: time.Second * 1}, err
 		}
 
 		// it's reusing a LB, so availableLB is expected to carry loadbalancer info
@@ -229,4 +303,47 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 
 	// We don't care about update of cluster Service, so do nothing here
 	return reconcile.Result{}, nil
+}
+
+func (idxMap *crLBIdxMap) add(crName, lbName types.NamespacedName) {
+	idxMap.crToLB[crName] = lbName
+	if idxMap.lbToCRs[lbName] == nil {
+		idxMap.lbToCRs[lbName] = make(nameSet)
+	}
+	idxMap.lbToCRs[lbName][crName] = struct{}{}
+}
+
+func (idxMap *crLBIdxMap) remove(lbName types.NamespacedName) {
+	for cr := range idxMap.lbToCRs[lbName] {
+		delete(idxMap.crToLB, cr)
+	}
+	delete(idxMap.lbToCRs, lbName)
+}
+
+func (idxMap *crLBIdxMap) hasCR(crName types.NamespacedName) bool {
+	_, ok := idxMap.crToLB[crName]
+	return ok
+}
+
+func (idxMap *crLBIdxMap) hasLB(lbName types.NamespacedName) bool {
+	return len(idxMap.lbToCRs[lbName]) != 0
+}
+
+func containsString(slice []string, s string) bool {
+	for _, item := range slice {
+		if item == s {
+			return true
+		}
+	}
+	return false
+}
+
+func removeString(slice []string, s string) (result []string) {
+	for _, item := range slice {
+		if item == s {
+			continue
+		}
+		result = append(result, item)
+	}
+	return
 }

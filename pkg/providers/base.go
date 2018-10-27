@@ -25,7 +25,20 @@ import (
 )
 
 var log logr.Logger
-var svcPostfix = "-service"
+
+var (
+	// svcPostfix is the stringa appended to cluster service object
+	SvcPostfix = "-service"
+	// namespace that LoadBalancer service will be created in
+	// most probably it's the same value of the namespace that this binary runs in
+	namespace = GetEnvVal("NAMESPACE", "default")
+	// capacity is the threshold value a LoadBalancer service can hold
+	capacity = GetEnvValInt("CAPACITY", 2)
+	// FinalizerName is the name of finalizer attached to Cluster Service object
+	FinalizerName = "sharedlb.kubecon.k8s.io/finalizer"
+)
+
+type nameSet map[types.NamespacedName]struct{}
 
 func init() {
 	log = logf.Log.WithName("providers")
@@ -38,6 +51,8 @@ func NewProvider() LBProvider {
 	switch providerStr {
 	case "iks":
 		provider = newIKSProvider()
+	case "eks":
+		provider = newEKSProvider()
 	case "local":
 		provider = newLocalProvider()
 	}
@@ -49,8 +64,8 @@ type LBProvider interface {
 	NewService(sharedLB *kubeconv1alpha1.SharedLB) *corev1.Service
 	NewLBService() *corev1.Service
 	GetAvailabelLB() *corev1.Service
-	AssociateLB(cr, lb types.NamespacedName) error
-	DeassociateLB(cr types.NamespacedName) error
+	AssociateLB(cr, lb types.NamespacedName, clusterSvc *corev1.Service) error
+	DeassociateLB(cr types.NamespacedName, clusterSvc *corev1.Service) error
 	UpdateCache(key types.NamespacedName, val *corev1.Service)
 
 	GetCapacityPerLB() int
@@ -60,4 +75,16 @@ type LBProvider interface {
 	UpdateService(svc, lb *corev1.Service) (portUpdated, externalIPUpdated bool)
 }
 
-type nameSet map[types.NamespacedName]struct{}
+// TODO(Huang-Wei): ensure port is not duplicated
+func updatePort(svc, lb *corev1.Service) bool {
+	updated := false
+	// check if svc doesn't carry port info
+	for i, svcPort := range svc.Spec.Ports {
+		if svcPort.Port != 0 {
+			continue
+		}
+		svc.Spec.Ports[i].Port = GetRandomPort()
+		updated = true
+	}
+	return updated
+}

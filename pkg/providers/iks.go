@@ -17,6 +17,8 @@ limitations under the License.
 package providers
 
 import (
+	"errors"
+
 	kubeconv1alpha1 "github.com/Huang-Wei/shared-loadbalancer/pkg/apis/kubecon/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -46,7 +48,7 @@ func newIKSProvider() *IKS {
 		cacheMap:      make(map[types.NamespacedName]*corev1.Service),
 		crToLB:        make(map[types.NamespacedName]types.NamespacedName),
 		lbToCRs:       make(map[types.NamespacedName]nameSet),
-		capacityPerLB: 2,
+		capacityPerLB: capacity,
 	}
 }
 
@@ -54,18 +56,18 @@ func (i *IKS) GetCapacityPerLB() int {
 	return i.capacityPerLB
 }
 
-func (i *IKS) UpdateCache(key types.NamespacedName, val *corev1.Service) {
-	if val == nil {
+func (i *IKS) UpdateCache(key types.NamespacedName, lbSvc *corev1.Service) {
+	if lbSvc == nil {
 		delete(i.cacheMap, key)
 	} else {
-		i.cacheMap[key] = val
+		i.cacheMap[key] = lbSvc
 	}
 }
 
 func (i *IKS) NewService(sharedLB *kubeconv1alpha1.SharedLB) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      sharedLB.Name + svcPostfix,
+			Name:      sharedLB.Name + SvcPostfix,
 			Namespace: sharedLB.Namespace,
 		},
 		Spec: corev1.ServiceSpec{
@@ -78,9 +80,8 @@ func (i *IKS) NewService(sharedLB *kubeconv1alpha1.SharedLB) *corev1.Service {
 func (i *IKS) NewLBService() *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "lb-" + RandStringRunes(8),
-			// TODO(Huang-Wei): should put namespace as sharedlb-mgmt-namespace
-			Namespace: "default",
+			Name:      "lb-" + RandStringRunes(8),
+			Namespace: namespace,
 			Labels:    map[string]string{"lb-template": ""},
 		},
 		Spec: corev1.ServiceSpec{
@@ -112,26 +113,33 @@ func (i *IKS) GetAvailabelLB() *corev1.Service {
 	return nil
 }
 
-func (i *IKS) AssociateLB(crName, lbName types.NamespacedName) error {
-	log.WithName("iks").Info("AssociateLB", "cr", crName, "lb", lbName)
-	// if lb exists
-	if crs, ok := i.lbToCRs[lbName]; ok {
-		crs[crName] = struct{}{}
-		i.crToLB[crName] = lbName
-	} else {
-		i.lbToCRs[lbName] = make(nameSet)
-		i.lbToCRs[lbName][crName] = struct{}{}
-		i.crToLB[crName] = lbName
+func (i *IKS) AssociateLB(crName, lbName types.NamespacedName, clusterSvc *corev1.Service) error {
+	if clusterSvc != nil {
+		if lbSvc, ok := i.cacheMap[lbName]; !ok || len(lbSvc.Status.LoadBalancer.Ingress) == 0 {
+			return errors.New("LoadBalancer service not exist yet")
+		}
 	}
+
+	// following code might be called multiple times, but shouldn't impact
+	// performance a lot as all of them are O(1) operation
+	_, ok := i.lbToCRs[lbName]
+	if !ok {
+		i.lbToCRs[lbName] = make(nameSet)
+	}
+	i.lbToCRs[lbName][crName] = struct{}{}
+	i.crToLB[crName] = lbName
+	log.WithName("iks").Info("AssociateLB", "cr", crName, "lb", lbName)
 	return nil
 }
 
-func (i *IKS) DeassociateLB(crd types.NamespacedName) error {
+// DeassociateLB is called by IKS finalizer to clean internal cache
+// no IaaS things should be done for IKS
+func (i *IKS) DeassociateLB(crName types.NamespacedName, _ *corev1.Service) error {
 	// update cache
-	if lb, ok := i.crToLB[crd]; ok {
-		delete(i.crToLB, crd)
-		delete(i.lbToCRs[lb], crd)
-		log.WithName("iks").Info("DeassociateLB", "crd", crd, "lb", lb)
+	if lb, ok := i.crToLB[crName]; ok {
+		delete(i.crToLB, crName)
+		delete(i.lbToCRs[lb], crName)
+		log.WithName("iks").Info("DeassociateLB", "cr", crName, "lb", lb)
 	}
 	return nil
 }
@@ -140,20 +148,6 @@ func (i *IKS) UpdateService(svc, lb *corev1.Service) (bool, bool) {
 	portUpdated := updatePort(svc, lb)
 	externalIPUpdated := updateExternalIP(svc, lb)
 	return portUpdated, externalIPUpdated
-}
-
-// TODO(Huang-Wei): ensure port is not duplicated
-func updatePort(svc, lb *corev1.Service) bool {
-	updated := false
-	// check if svc doesn't carry port info
-	for i, svcPort := range svc.Spec.Ports {
-		if svcPort.Port != 0 {
-			continue
-		}
-		svc.Spec.Ports[i].Port = GetRandomPort()
-		updated = true
-	}
-	return updated
 }
 
 func updateExternalIP(svc, lb *corev1.Service) bool {

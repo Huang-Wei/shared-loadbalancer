@@ -17,6 +17,8 @@ limitations under the License.
 package providers
 
 import (
+	"errors"
+
 	kubeconv1alpha1 "github.com/Huang-Wei/shared-loadbalancer/pkg/apis/kubecon/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -45,7 +47,7 @@ func newLocalProvider() *Local {
 		cacheMap:      make(map[types.NamespacedName]*corev1.Service),
 		crToLB:        make(map[types.NamespacedName]types.NamespacedName),
 		lbToCRs:       make(map[types.NamespacedName]nameSet),
-		capacityPerLB: 3,
+		capacityPerLB: capacity,
 	}
 }
 
@@ -60,7 +62,7 @@ func (l *Local) UpdateCache(key types.NamespacedName, val *corev1.Service) {
 func (l *Local) NewService(sharedLB *kubeconv1alpha1.SharedLB) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      sharedLB.Name + "-service",
+			Name:      sharedLB.Name + SvcPostfix,
 			Namespace: sharedLB.Namespace,
 		},
 		Spec: corev1.ServiceSpec{
@@ -74,7 +76,7 @@ func (l *Local) NewLBService() *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "lb-" + RandStringRunes(8),
-			Namespace: "default",
+			Namespace: namespace,
 			Labels:    map[string]string{"lb-template": ""},
 		},
 		Spec: corev1.ServiceSpec{
@@ -98,21 +100,24 @@ func (l *Local) GetAvailabelLB() *corev1.Service {
 	return nil
 }
 
-func (l *Local) AssociateLB(crName, lbName types.NamespacedName) error {
-	log.WithName("local").Info("AssociateLB", "cr", crName, "lb", lbName)
-	// if lb exists
-	if crs, ok := l.lbToCRs[lbName]; ok {
-		crs[crName] = struct{}{}
-		l.crToLB[crName] = lbName
-	} else {
-		l.lbToCRs[lbName] = make(nameSet)
-		l.lbToCRs[lbName][crName] = struct{}{}
-		l.crToLB[crName] = lbName
+func (l *Local) AssociateLB(crName, lbName types.NamespacedName, _ *corev1.Service) error {
+	if _, ok := l.cacheMap[lbName]; !ok {
+		return errors.New("LoadBalancer service not exist yet")
 	}
+
+	// following code might be called multiple times, but shouldn't impact
+	// performance a lot as all of them are O(1) operation
+	_, ok := l.lbToCRs[lbName]
+	if !ok {
+		l.lbToCRs[lbName] = make(nameSet)
+	}
+	l.lbToCRs[lbName][crName] = struct{}{}
+	l.crToLB[crName] = lbName
+	log.WithName("local").Info("AssociateLB", "cr", crName, "lb", lbName)
 	return nil
 }
 
-func (l *Local) DeassociateLB(crd types.NamespacedName) error {
+func (l *Local) DeassociateLB(crd types.NamespacedName, _ *corev1.Service) error {
 	// update cache
 	if lb, ok := l.crToLB[crd]; ok {
 		delete(l.crToLB, crd)
