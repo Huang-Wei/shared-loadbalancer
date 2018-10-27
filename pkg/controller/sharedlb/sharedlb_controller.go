@@ -158,6 +158,7 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 		return reconcile.Result{}, nil
 	} else if errors.IsNotFound(err) && strings.Index(request.Name, "lb-") == 0 {
 		// TODO(Huang-Wei): improve logic to not check it's a LB service or CR obj by string
+		// use finalizer?
 		// lb service has been deleted (by external user)
 		log.Info("LB is deleted. Updating lb cache.", "name", request.Name)
 		r.provider.UpdateCache(request.NamespacedName, nil)
@@ -180,14 +181,45 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 		if errors.IsNotFound(err) {
 			// Object not found, return.  Created objects are automatically garbage collected.
 			// For additional cleanup logic use finalizers.
-			// TODO(Huang-Wei): use finalizers instead
-			// need to deassociate with the LoadBalancer service
-			r.provider.DeassociateLB(request.NamespacedName)
 			return reconcile.Result{}, nil
 		}
 		// Error reading the object - requeue the request.
 		return reconcile.Result{}, err
-	} else if crObj.Status.Ref != "" {
+	}
+
+	// apply or deal with finalizer
+	if crObj.ObjectMeta.DeletionTimestamp.IsZero() {
+		// The CR object is not being deleted, so if it does not have desired finalizer,
+		// add the finalizer and update the object.
+		if !containsString(crObj.ObjectMeta.Finalizers, providers.FinalizerName) {
+			crObj.ObjectMeta.Finalizers = append(crObj.ObjectMeta.Finalizers, providers.FinalizerName)
+			// if err := r.Update(context.Background(), crObj); err != nil {
+			// 	return reconcile.Result{Requeue: true}, nil
+			// }
+			err := r.Update(context.Background(), crObj)
+			// requeue if err != nil; otherwise we're done
+			return reconcile.Result{Requeue: err != nil}, nil
+		}
+	} else {
+		if containsString(crObj.ObjectMeta.Finalizers, providers.FinalizerName) {
+			err := r.provider.DeassociateLB(request.NamespacedName)
+			if err != nil {
+				// fail to delete the external dependency here, return with error
+				// so that it can be retried
+				return reconcile.Result{}, err
+			}
+			// remove our finalizer from the list and update it.
+			crObj.ObjectMeta.Finalizers = removeString(crObj.ObjectMeta.Finalizers, providers.FinalizerName)
+			// if err := r.Update(context.Background(), crObj); err != nil {
+			// 	return reconcile.Result{Requeue: true}, nil
+			// }
+			err = r.Update(context.Background(), crObj)
+			// requeue if err != nil; otherwise we're done
+			return reconcile.Result{Requeue: err != nil}, nil
+		}
+	}
+
+	if crObj.Status.Ref != "" {
 		strs := strings.Split(crObj.Status.Ref, "/")
 		if err := r.provider.AssociateLB(request.NamespacedName, types.NamespacedName{Namespace: strs[0], Name: strs[1]}, nil); err != nil {
 			// this err means corresponding Iaas Obj not exist yet
@@ -288,4 +320,23 @@ func (idxMap *crLBIdxMap) hasCR(crName types.NamespacedName) bool {
 
 func (idxMap *crLBIdxMap) hasLB(lbName types.NamespacedName) bool {
 	return len(idxMap.lbToCRs[lbName]) != 0
+}
+
+func containsString(slice []string, s string) bool {
+	for _, item := range slice {
+		if item == s {
+			return true
+		}
+	}
+	return false
+}
+
+func removeString(slice []string, s string) (result []string) {
+	for _, item := range slice {
+		if item == s {
+			continue
+		}
+		result = append(result, item)
+	}
+	return
 }

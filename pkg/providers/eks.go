@@ -188,6 +188,8 @@ func (e *EKS) AssociateLB(crName, lbName types.NamespacedName, clusterSvc *corev
 	return nil
 }
 
+// DeassociateLB is called by EKS finalizer to clean listeners
+// and inbound rules of security group
 func (e *EKS) DeassociateLB(crName types.NamespacedName) error {
 	lbName, ok := e.crToLB[crName]
 	if !ok {

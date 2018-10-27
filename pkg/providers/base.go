@@ -34,8 +34,8 @@ var (
 	namespace = GetEnvVal("NAMESPACE", "default")
 	// capacity is the threshold value a LoadBalancer service can hold
 	capacity = GetEnvValInt("CAPACITY", 2)
-	// finalizerName is the name of finalizer attached to CR (or Cluster Service?) object
-	finalizerName = "sharedlb.finalizers.kubecon.k8s.io"
+	// FinalizerName is the name of finalizer attached to Cluster Service object
+	FinalizerName = "sharedlb.kubecon.k8s.io/finalizer"
 )
 
 type nameSet map[types.NamespacedName]struct{}

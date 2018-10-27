@@ -132,6 +132,8 @@ func (i *IKS) AssociateLB(crName, lbName types.NamespacedName, clusterSvc *corev
 	return nil
 }
 
+// DeassociateLB is called by IKS finalizer to clean internal cache
+// no IaaS things should be done for IKS
 func (i *IKS) DeassociateLB(crName types.NamespacedName) error {
 	// update cache
 	if lb, ok := i.crToLB[crName]; ok {
