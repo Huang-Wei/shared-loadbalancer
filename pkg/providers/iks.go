@@ -29,8 +29,6 @@ import (
 type IKS struct {
 	// key is namespacedName of a LB Serivce, val is the service
 	cacheMap map[types.NamespacedName]*corev1.Service
-	// TODO(Huang-Wei): keyName => IaaS stuff
-	// cacheIaaSMap
 
 	// cr to LB is 1:1 mapping
 	crToLB map[types.NamespacedName]types.NamespacedName
@@ -38,7 +36,6 @@ type IKS struct {
 	lbToCRs map[types.NamespacedName]nameSet
 
 	capacityPerLB int
-	credentials   string
 }
 
 var _ LBProvider = &IKS{}
