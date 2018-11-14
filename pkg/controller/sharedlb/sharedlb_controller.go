@@ -187,7 +187,7 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 		return reconcile.Result{}, err
 	}
 
-	// apply or deal with finalizer
+	// apply or strip finalizer
 	if crObj.ObjectMeta.DeletionTimestamp.IsZero() {
 		// The CR object is not being deleted, so if it does not have desired finalizer,
 		// add the finalizer and update the object.
@@ -253,10 +253,10 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 	if err == nil && crObj.Status.Ref != "" {
 		strs := strings.Split(crObj.Status.Ref, "/")
 		if err := r.provider.AssociateLB(request.NamespacedName, types.NamespacedName{Namespace: strs[0], Name: strs[1]}, clusterSvc); err != nil {
-			// this err means corresponding Iaas Obj not exist yet
-			// so we re-enqueue with a little backoff
+			// this err means corresponding IaaS Obj not exist yet
+			// so we requeue with a bit backoff
 			// this is possible in 2 cases:
-			// i)  cluster start phase: CR obj Add event comes before LB obj Add event
+			// i)  program start phase: CR obj Add event comes before LB obj Add event
 			// ii) LB/IaaS obj created too slow
 			log.Info(err.Error())
 			return reconcile.Result{Requeue: true, RequeueAfter: time.Millisecond * 100}, nil
@@ -277,7 +277,6 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 			}
 			log.Info("A real LB is created", "name", availableLB.Name, "lbinfo", availableLB.Status.LoadBalancer)
 			// NOTE: here we directly return to start a new reconcile
-			// return reconcile.Result{Requeue: true, RequeueAfter: time.Millisecond * 200}, nil
 			r.pendingQ.add(request.NamespacedName, types.NamespacedName{Name: availableLB.Name, Namespace: availableLB.Namespace})
 			return reconcile.Result{Requeue: true, RequeueAfter: time.Millisecond * 500}, nil
 		}

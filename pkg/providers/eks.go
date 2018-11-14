@@ -23,6 +23,7 @@ import (
 
 	kubeconv1alpha1 "github.com/Huang-Wei/shared-loadbalancer/pkg/apis/kubecon/v1alpha1"
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/endpoints"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -57,6 +58,8 @@ type EKS struct {
 	crToLB map[types.NamespacedName]types.NamespacedName
 	// lb to CRD is 1:N mapping
 	lbToCRs map[types.NamespacedName]nameSet
+	// lbToPorts is keyed with ns/name of a LB, and valued with ports info it holds
+	lbToPorts map[types.NamespacedName]int32Set
 
 	capacityPerLB int
 }
@@ -75,6 +78,7 @@ func newEKSProvider() *EKS {
 		cacheELB:      make(map[types.NamespacedName]*elb.LoadBalancerDescription),
 		crToLB:        make(map[types.NamespacedName]types.NamespacedName),
 		lbToCRs:       make(map[types.NamespacedName]nameSet),
+		lbToPorts:     make(map[types.NamespacedName]int32Set),
 		capacityPerLB: capacity,
 	}
 }
@@ -110,7 +114,7 @@ func (e *EKS) NewService(sharedLB *kubeconv1alpha1.SharedLB) *corev1.Service {
 			Namespace: sharedLB.Namespace,
 		},
 		Spec: corev1.ServiceSpec{
-			// TODO(Huang-Wei): NodePort is the solution we can come up with so far
+			// NodePort is the solution we can come up with so far
 			Type:     corev1.ServiceTypeNodePort,
 			Ports:    sharedLB.Spec.Ports,
 			Selector: sharedLB.Spec.Selector,
@@ -145,13 +149,25 @@ func (e *EKS) NewLBService() *corev1.Service {
 	}
 }
 
-func (e *EKS) GetAvailabelLB(_ *corev1.Service) *corev1.Service {
+func (e *EKS) GetAvailabelLB(clusterSvc *corev1.Service) *corev1.Service {
+	// we leverage the randomness of golang "for range" when iterating
+OUTERLOOP:
 	for lbKey, lbSvc := range e.cacheMap {
-		if len(e.lbToCRs[lbKey]) < e.capacityPerLB {
-			return lbSvc
+		if len(e.lbToCRs[lbKey]) >= e.capacityPerLB {
+			continue
 		}
+		// must satisfy that all svc ports are not occupied in lbSvc
+		for _, svcPort := range clusterSvc.Spec.Ports {
+			if e.lbToPorts[lbKey] == nil {
+				e.lbToPorts[lbKey] = int32Set{}
+			}
+			if _, ok := e.lbToPorts[lbKey][svcPort.Port]; ok {
+				log.WithName("eks").Info(fmt.Sprintf("incoming service has port conflict with lbSvc %q on port %d", lbKey, svcPort.Port))
+				continue OUTERLOOP
+			}
+		}
+		return lbSvc
 	}
-
 	return nil
 }
 
@@ -160,12 +176,23 @@ func (e *EKS) AssociateLB(crName, lbName types.NamespacedName, clusterSvc *corev
 	// b) create inbound rules to security group (authorize-security-group-ingress)
 	if clusterSvc != nil {
 		if elbDesc := e.cacheELB[lbName]; elbDesc != nil {
-			if err := e.createListeners(clusterSvc, elbDesc); err != nil {
+			executed, err := e.createListeners(clusterSvc, elbDesc)
+			if err != nil {
 				return err
 			}
-			if err := e.createInboundRules(clusterSvc, elbDesc); err != nil {
-				return err
+			if executed {
+				if err := e.createInboundRules(clusterSvc, elbDesc); err != nil {
+					return err
+				}
 			}
+		}
+		// upon program starts, e.lbToPorts[lbName] can be nil
+		if e.lbToPorts[lbName] == nil {
+			e.lbToPorts[lbName] = int32Set{}
+		}
+		// update crToPorts
+		for _, svcPort := range clusterSvc.Spec.Ports {
+			e.lbToPorts[lbName][svcPort.Port] = struct{}{}
 		}
 	}
 
@@ -204,6 +231,9 @@ func (e *EKS) DeassociateLB(crName types.NamespacedName, clusterSvc *corev1.Serv
 	// c) update internal cache
 	delete(e.crToLB, crName)
 	delete(e.lbToCRs[lbName], crName)
+	for _, svcPort := range clusterSvc.Spec.Ports {
+		delete(e.lbToPorts[lbName], svcPort.Port)
+	}
 	log.WithName("eks").Info("DeassociateLB", "cr", crName, "lb", lbName)
 	return nil
 }
@@ -233,9 +263,11 @@ func (e *EKS) queryELB(elbName string) (*elb.LoadBalancerDescription, error) {
 	return result.LoadBalancerDescriptions[0], nil
 }
 
-func (e *EKS) createListeners(clusterSvc *corev1.Service, elbDesc *elb.LoadBalancerDescription) error {
+// 1st return value means if it's executed
+// 2nd return value returns error if it's executed
+func (e *EKS) createListeners(clusterSvc *corev1.Service, elbDesc *elb.LoadBalancerDescription) (bool, error) {
 	if clusterSvc == nil || elbDesc == nil {
-		return errors.New("clusterSvc or elbDesc is nil")
+		return false, errors.New("clusterSvc or elbDesc is nil")
 	}
 	listeners := make([]*elb.Listener, 0)
 	for _, p := range clusterSvc.Spec.Ports {
@@ -254,7 +286,7 @@ func (e *EKS) createListeners(clusterSvc *corev1.Service, elbDesc *elb.LoadBalan
 		listeners = append(listeners, &listener)
 	}
 	if len(listeners) == 0 {
-		return nil
+		return false, nil
 	}
 
 	input := &elb.CreateLoadBalancerListenersInput{
@@ -262,7 +294,14 @@ func (e *EKS) createListeners(clusterSvc *corev1.Service, elbDesc *elb.LoadBalan
 		LoadBalancerName: elbDesc.LoadBalancerName,
 	}
 	_, err := e.elbClient.CreateLoadBalancerListeners(input)
-	return err
+
+	// tolerate if the listener exists in server side
+	if aerr, ok := err.(awserr.Error); ok && aerr.Code() == elb.ErrCodeDuplicateListenerException {
+		log.WithName("eks").Info("awserr", "code", aerr.Code())
+		return true, nil
+	}
+
+	return true, err
 }
 
 func isListenerExisted(l elb.Listener, listenerDescs []*elb.ListenerDescription) bool {
@@ -313,6 +352,10 @@ func (e *EKS) createInboundRules(clusterSvc *corev1.Service, elbDesc *elb.LoadBa
 		IpPermissions: ipPermissions,
 	}
 	_, err := e.ec2Client.AuthorizeSecurityGroupIngress(input)
+	// tolerate if the rules exist in server side
+	if aerr, ok := err.(awserr.Error); ok && aerr.Code() == "InvalidPermission.Duplicate" {
+		return nil
+	}
 	return err
 }
 
