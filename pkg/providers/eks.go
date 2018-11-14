@@ -239,7 +239,12 @@ func (e *EKS) DeassociateLB(crName types.NamespacedName, clusterSvc *corev1.Serv
 }
 
 func (e *EKS) UpdateService(svc, lb *corev1.Service) (bool, bool) {
-	portUpdated := updatePort(svc, lb)
+	lbName := types.NamespacedName{Name: lb.Name, Namespace: lb.Namespace}
+	occupiedPorts := e.lbToPorts[lbName]
+	if len(occupiedPorts) == 0 {
+		occupiedPorts = int32Set{}
+	}
+	portUpdated := updatePort(svc, lb, occupiedPorts)
 	// don't need to update externalIP
 	return portUpdated, false
 }
