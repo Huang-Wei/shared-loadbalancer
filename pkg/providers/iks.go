@@ -100,7 +100,7 @@ func (i *IKS) NewLBService() *corev1.Service {
 	}
 }
 
-func (i *IKS) GetAvailabelLB() *corev1.Service {
+func (i *IKS) GetAvailabelLB(_ *corev1.Service) *corev1.Service {
 	for lbKey, lbSvc := range i.cacheMap {
 		if len(i.lbToCRs[lbKey]) < i.capacityPerLB {
 			return lbSvc

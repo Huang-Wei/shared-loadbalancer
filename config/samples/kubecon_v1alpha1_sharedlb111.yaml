@@ -1,0 +1,12 @@
+apiVersion: kubecon.k8s.io/v1alpha1
+kind: SharedLB
+metadata:
+  labels:
+    controller-tools.k8s.io: "1.0"
+  name: sharedlb-sample111
+spec:
+  ports:
+  - port: 8081
+    targetPort: 80
+  selector:
+    app: nginx

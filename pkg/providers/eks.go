@@ -145,7 +145,7 @@ func (e *EKS) NewLBService() *corev1.Service {
 	}
 }
 
-func (e *EKS) GetAvailabelLB() *corev1.Service {
+func (e *EKS) GetAvailabelLB(_ *corev1.Service) *corev1.Service {
 	for lbKey, lbSvc := range e.cacheMap {
 		if len(e.lbToCRs[lbKey]) < e.capacityPerLB {
 			return lbSvc
