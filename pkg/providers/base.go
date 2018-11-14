@@ -68,24 +68,27 @@ type LBProvider interface {
 	AssociateLB(cr, lb types.NamespacedName, clusterSvc *corev1.Service) error
 	DeassociateLB(cr types.NamespacedName, clusterSvc *corev1.Service) error
 	UpdateCache(key types.NamespacedName, val *corev1.Service)
-
 	GetCapacityPerLB() int
-
-	// TODO(Huang-Wei): can be removed and implement in utils.go
-	// and rename to "UpdateServiceExternalIP"
 	UpdateService(svc, lb *corev1.Service) (portUpdated, externalIPUpdated bool)
 }
 
-// TODO(Huang-Wei): ensure port is not duplicated
-func updatePort(svc, lb *corev1.Service) bool {
+func updatePort(svc, lb *corev1.Service, occupiedPorts int32Set) bool {
 	updated := false
-	// check if svc doesn't carry port info
+	// check if svc carries port info or not
 	for i, svcPort := range svc.Spec.Ports {
 		if svcPort.Port != 0 {
 			continue
 		}
-		svc.Spec.Ports[i].Port = GetRandomPort()
-		updated = true
+		// TODO: if we run out of random ports..
+		for {
+			randomPort := GetRandomPort()
+			if _, ok := occupiedPorts[randomPort]; ok {
+				continue
+			}
+			svc.Spec.Ports[i].Port = randomPort
+			updated = true
+			break
+		}
 	}
 	return updated
 }
