@@ -18,6 +18,7 @@ package providers
 
 import (
 	"errors"
+	"fmt"
 
 	kubeconv1alpha1 "github.com/Huang-Wei/shared-loadbalancer/pkg/apis/kubecon/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
@@ -34,6 +35,8 @@ type IKS struct {
 	crToLB map[types.NamespacedName]types.NamespacedName
 	// lb to CRD is 1:N mapping
 	lbToCRs map[types.NamespacedName]nameSet
+	// lbToPorts is keyed with ns/name of a LB, and valued with ports info it holds
+	lbToPorts map[types.NamespacedName]int32Set
 
 	capacityPerLB int
 }
@@ -45,6 +48,7 @@ func newIKSProvider() *IKS {
 		cacheMap:      make(map[types.NamespacedName]*corev1.Service),
 		crToLB:        make(map[types.NamespacedName]types.NamespacedName),
 		lbToCRs:       make(map[types.NamespacedName]nameSet),
+		lbToPorts:     make(map[types.NamespacedName]int32Set),
 		capacityPerLB: capacity,
 	}
 }
@@ -100,13 +104,25 @@ func (i *IKS) NewLBService() *corev1.Service {
 	}
 }
 
-func (i *IKS) GetAvailabelLB() *corev1.Service {
+func (i *IKS) GetAvailabelLB(clusterSvc *corev1.Service) *corev1.Service {
+	// we leverage the randomness of golang "for range" when iterating
+OUTERLOOP:
 	for lbKey, lbSvc := range i.cacheMap {
-		if len(i.lbToCRs[lbKey]) < i.capacityPerLB {
-			return lbSvc
+		if len(i.lbToCRs[lbKey]) >= i.capacityPerLB {
+			continue
 		}
+		// must satisfy that all svc ports are not occupied in lbSvc
+		for _, svcPort := range clusterSvc.Spec.Ports {
+			if i.lbToPorts[lbKey] == nil {
+				i.lbToPorts[lbKey] = int32Set{}
+			}
+			if _, ok := i.lbToPorts[lbKey][svcPort.Port]; ok {
+				log.WithName("iks").Info(fmt.Sprintf("incoming service has port conflict with lbSvc %q on port %d", lbKey, svcPort.Port))
+				continue OUTERLOOP
+			}
+		}
+		return lbSvc
 	}
-
 	return nil
 }
 
@@ -114,6 +130,14 @@ func (i *IKS) AssociateLB(crName, lbName types.NamespacedName, clusterSvc *corev
 	if clusterSvc != nil {
 		if lbSvc, ok := i.cacheMap[lbName]; !ok || len(lbSvc.Status.LoadBalancer.Ingress) == 0 {
 			return errors.New("LoadBalancer service not exist yet")
+		}
+		// upon program starts, i.lbToPorts[lbName] can be nil
+		if i.lbToPorts[lbName] == nil {
+			i.lbToPorts[lbName] = int32Set{}
+		}
+		// update crToPorts
+		for _, svcPort := range clusterSvc.Spec.Ports {
+			i.lbToPorts[lbName][svcPort.Port] = struct{}{}
 		}
 	}
 
@@ -131,11 +155,14 @@ func (i *IKS) AssociateLB(crName, lbName types.NamespacedName, clusterSvc *corev
 
 // DeassociateLB is called by IKS finalizer to clean internal cache
 // no IaaS things should be done for IKS
-func (i *IKS) DeassociateLB(crName types.NamespacedName, _ *corev1.Service) error {
-	// update cache
+func (i *IKS) DeassociateLB(crName types.NamespacedName, clusterSvc *corev1.Service) error {
+	// update internal cache
 	if lb, ok := i.crToLB[crName]; ok {
 		delete(i.crToLB, crName)
 		delete(i.lbToCRs[lb], crName)
+		for _, svcPort := range clusterSvc.Spec.Ports {
+			delete(i.lbToPorts[lb], svcPort.Port)
+		}
 		log.WithName("iks").Info("DeassociateLB", "cr", crName, "lb", lb)
 	}
 	return nil

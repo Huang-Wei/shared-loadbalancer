@@ -18,6 +18,7 @@ package providers
 
 import (
 	"errors"
+	"fmt"
 
 	kubeconv1alpha1 "github.com/Huang-Wei/shared-loadbalancer/pkg/apis/kubecon/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
@@ -33,9 +34,10 @@ type Local struct {
 	crToLB map[types.NamespacedName]types.NamespacedName
 	// lb to CRD is 1:N mapping
 	lbToCRs map[types.NamespacedName]nameSet
+	// lbToPorts is keyed with ns/name of a LB, and valued with ports info it holds
+	lbToPorts map[types.NamespacedName]int32Set
 
 	capacityPerLB int
-	credentials   string
 }
 
 var _ LBProvider = &Local{}
@@ -45,6 +47,7 @@ func newLocalProvider() *Local {
 		cacheMap:      make(map[types.NamespacedName]*corev1.Service),
 		crToLB:        make(map[types.NamespacedName]types.NamespacedName),
 		lbToCRs:       make(map[types.NamespacedName]nameSet),
+		lbToPorts:     make(map[types.NamespacedName]int32Set),
 		capacityPerLB: capacity,
 	}
 }
@@ -88,19 +91,43 @@ func (l *Local) NewLBService() *corev1.Service {
 	}
 }
 
-func (l *Local) GetAvailabelLB() *corev1.Service {
+func (l *Local) GetAvailabelLB(clusterSvc *corev1.Service) *corev1.Service {
+	// we leverage the randomness of golang "for range" when iterating
+OUTERLOOP:
 	for lbKey, lbSvc := range l.cacheMap {
-		if len(l.lbToCRs[lbKey]) < l.capacityPerLB {
-			return lbSvc
+		if len(l.lbToCRs[lbKey]) >= l.capacityPerLB {
+			continue
 		}
+		// must satisfy that all svc ports are not occupied in lbSvc
+		for _, svcPort := range clusterSvc.Spec.Ports {
+			if l.lbToPorts[lbKey] == nil {
+				l.lbToPorts[lbKey] = int32Set{}
+			}
+			if _, ok := l.lbToPorts[lbKey][svcPort.Port]; ok {
+				log.WithName("local").Info(fmt.Sprintf("incoming service has port conflict with lbSvc %q on port %d", lbKey, svcPort.Port))
+				continue OUTERLOOP
+			}
+		}
+		return lbSvc
 	}
-
 	return nil
 }
 
-func (l *Local) AssociateLB(crName, lbName types.NamespacedName, _ *corev1.Service) error {
-	if _, ok := l.cacheMap[lbName]; !ok {
-		return errors.New("LoadBalancer service not exist yet")
+func (l *Local) AssociateLB(crName, lbName types.NamespacedName, clusterSvc *corev1.Service) error {
+	if clusterSvc != nil {
+		// for a local (dev) env, we need some 3rd party network L2/L3 solution to work
+		// as a "LoadBalancer" provider, e.g. metallb
+		if lbSvc, ok := l.cacheMap[lbName]; !ok || len(lbSvc.Status.LoadBalancer.Ingress) == 0 {
+			return errors.New("LoadBalancer service not exist yet")
+		}
+		// upon program starts, l.lbToPorts[lbName] can be nil
+		if l.lbToPorts[lbName] == nil {
+			l.lbToPorts[lbName] = int32Set{}
+		}
+		// update crToPorts
+		for _, svcPort := range clusterSvc.Spec.Ports {
+			l.lbToPorts[lbName][svcPort.Port] = struct{}{}
+		}
 	}
 
 	// following code might be called multiple times, but shouldn't impact
@@ -115,12 +142,15 @@ func (l *Local) AssociateLB(crName, lbName types.NamespacedName, _ *corev1.Servi
 	return nil
 }
 
-func (l *Local) DeassociateLB(crd types.NamespacedName, _ *corev1.Service) error {
-	// update cache
-	if lb, ok := l.crToLB[crd]; ok {
-		delete(l.crToLB, crd)
-		delete(l.lbToCRs[lb], crd)
-		log.WithName("local").Info("DeassociateLB", "crd", crd, "lb", lb)
+func (l *Local) DeassociateLB(crName types.NamespacedName, clusterSvc *corev1.Service) error {
+	// update internal cache
+	if lb, ok := l.crToLB[crName]; ok {
+		delete(l.crToLB, crName)
+		delete(l.lbToCRs[lb], crName)
+		for _, svcPort := range clusterSvc.Spec.Ports {
+			delete(l.lbToPorts[lb], svcPort.Port)
+		}
+		log.WithName("local").Info("DeassociateLB", "crName", crName, "lb", lb)
 	}
 	return nil
 }

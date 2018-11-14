@@ -39,6 +39,7 @@ var (
 )
 
 type nameSet map[types.NamespacedName]struct{}
+type int32Set map[int32]struct{}
 
 func init() {
 	log = logf.Log.WithName("providers")
@@ -63,7 +64,7 @@ func NewProvider() LBProvider {
 type LBProvider interface {
 	NewService(sharedLB *kubeconv1alpha1.SharedLB) *corev1.Service
 	NewLBService() *corev1.Service
-	GetAvailabelLB() *corev1.Service
+	GetAvailabelLB(clusterSvc *corev1.Service) *corev1.Service
 	AssociateLB(cr, lb types.NamespacedName, clusterSvc *corev1.Service) error
 	DeassociateLB(cr types.NamespacedName, clusterSvc *corev1.Service) error
 	UpdateCache(key types.NamespacedName, val *corev1.Service)
