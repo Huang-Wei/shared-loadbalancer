@@ -115,20 +115,19 @@ OUTERLOOP:
 
 func (l *Local) AssociateLB(crName, lbName types.NamespacedName, clusterSvc *corev1.Service) error {
 	if clusterSvc != nil {
-		// for local provider, it's more for testing purpose, so not required to
-		// have real loadbalancer ip present in lbSvc
-		if _, ok := l.cacheMap[lbName]; !ok {
+		// for a local (dev) env, we need some 3rd party network L2/L3 solution to work
+		// as a "LoadBalancer" provider, e.g. metallb
+		if lbSvc, ok := l.cacheMap[lbName]; !ok || len(lbSvc.Status.LoadBalancer.Ingress) == 0 {
 			return errors.New("LoadBalancer service not exist yet")
 		}
-		// update crToPorts
+		// upon program starts, l.lbToPorts[lbName] can be nil
 		if l.lbToPorts[lbName] == nil {
-			log.WithName("local").Info("[DEBUG] lbToPorts can be nil")
 			l.lbToPorts[lbName] = int32Set{}
 		}
+		// update crToPorts
 		for _, svcPort := range clusterSvc.Spec.Ports {
 			l.lbToPorts[lbName][svcPort.Port] = struct{}{}
 		}
-		// log.WithName("local").Info("[DEBUG] lbToPorts", "lbToPorts", fmt.Sprintf("%v", l.lbToPorts))
 	}
 
 	// following code might be called multiple times, but shouldn't impact
@@ -143,12 +142,15 @@ func (l *Local) AssociateLB(crName, lbName types.NamespacedName, clusterSvc *cor
 	return nil
 }
 
-func (l *Local) DeassociateLB(crd types.NamespacedName, _ *corev1.Service) error {
-	// update cache
-	if lb, ok := l.crToLB[crd]; ok {
-		delete(l.crToLB, crd)
-		delete(l.lbToCRs[lb], crd)
-		log.WithName("local").Info("DeassociateLB", "crd", crd, "lb", lb)
+func (l *Local) DeassociateLB(crName types.NamespacedName, clusterSvc *corev1.Service) error {
+	// update internal cache
+	if lb, ok := l.crToLB[crName]; ok {
+		delete(l.crToLB, crName)
+		delete(l.lbToCRs[lb], crName)
+		for _, svcPort := range clusterSvc.Spec.Ports {
+			delete(l.lbToPorts[lb], svcPort.Port)
+		}
+		log.WithName("local").Info("DeassociateLB", "crName", crName, "lb", lb)
 	}
 	return nil
 }
