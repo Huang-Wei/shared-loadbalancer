@@ -46,7 +46,6 @@ func init() {
 
 // Add creates a new SharedLB Controller and adds it to the Manager with default RBAC. The Manager will set fields on the Controller
 // and Start it when the Manager is Started.
-// USER ACTION REQUIRED: update cmd/manager/main.go to call this kubecon.Add(mgr) to install this Controller
 func Add(mgr manager.Manager) error {
 	return add(mgr, newReconciler(mgr))
 }
@@ -139,7 +138,6 @@ type crLBIdxMap struct {
 
 // Reconcile reads that state of the cluster for a SharedLB object and makes changes based on the state read
 // and what is in the SharedLB.Spec
-// TODO(user): Modify this Reconcile function to implement your Controller logic.
 // The scaffolding writes a Service as an example
 // Automatically generate RBAC rules to allow the Controller to read and write Services
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
@@ -157,9 +155,7 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 		}
 		return reconcile.Result{}, nil
 	} else if errors.IsNotFound(err) && strings.Index(request.Name, "lb-") == 0 {
-		// TODO(Huang-Wei): improve logic to not check it's a LB service or CR obj by string
-		// use finalizer?
-		// lb service has been deleted (by external user)
+		// TODO(Huang-Wei): improve logic here to check if it's a LB svc deletion
 		log.Info("LB is deleted. Updating lb cache.", "name", request.Name)
 		r.provider.UpdateCache(request.NamespacedName, nil)
 		return reconcile.Result{}, nil
@@ -179,25 +175,24 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 	err = r.Get(context.TODO(), request.NamespacedName, crObj)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			// Object not found, return.  Created objects are automatically garbage collected.
-			// For additional cleanup logic use finalizers.
+			// if cr obj is not found, means it's been deleted. we can simply return b/c:
+			// (1) dependent objects will be automatically garbage collected, and
+			// (2) additional cleanup logic are handled by finalizers.
 			return reconcile.Result{}, nil
 		}
 		// Error reading the object - requeue the request.
 		return reconcile.Result{}, err
 	}
 
-	// apply or strip finalizer
+	// add or remove finalizer
 	if crObj.ObjectMeta.DeletionTimestamp.IsZero() {
 		// The CR object is not being deleted, so if it does not have desired finalizer,
 		// add the finalizer and update the object.
 		if !containsString(crObj.ObjectMeta.Finalizers, providers.FinalizerName) {
 			crObj.ObjectMeta.Finalizers = append(crObj.ObjectMeta.Finalizers, providers.FinalizerName)
-			// if err := r.Update(context.Background(), crObj); err != nil {
-			// 	return reconcile.Result{Requeue: true}, nil
-			// }
 			err := r.Update(context.Background(), crObj)
-			// requeue if err != nil; otherwise we're done
+			// note: the code here is slightly different with kubebuilder sample code
+			// where requeue everytime, but here we only requeue when err != nil
 			return reconcile.Result{Requeue: err != nil}, nil
 		}
 	} else {
@@ -217,27 +212,12 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 			}
 			// remove our finalizer from the list and update it.
 			crObj.ObjectMeta.Finalizers = removeString(crObj.ObjectMeta.Finalizers, providers.FinalizerName)
-			// if err := r.Update(context.Background(), crObj); err != nil {
-			// 	return reconcile.Result{Requeue: true}, nil
-			// }
 			err = r.Update(context.Background(), crObj)
-			// requeue if err != nil; otherwise we're done
+			// note: the code here is slightly different with kubebuilder sample code
+			// where requeue everytime, but here we only requeue when err != nil
 			return reconcile.Result{Requeue: err != nil}, nil
 		}
 	}
-
-	// if crObj.Status.Ref != "" {
-	// 	strs := strings.Split(crObj.Status.Ref, "/")
-	// 	if err := r.provider.AssociateLB(request.NamespacedName, types.NamespacedName{Namespace: strs[0], Name: strs[1]}, nil); err != nil {
-	// 		// this err means corresponding Iaas Obj not exist yet
-	// 		// so we re-enqueue with a little backoff
-	// 		// this is possible in 2 cases:
-	// 		// i)  cluster start phase: CR obj Add event comes before LB obj Add event
-	// 		// ii) LB/IaaS obj created too slow
-	// 		log.Info(err.Error())
-	// 		return reconcile.Result{Requeue: true, RequeueAfter: time.Millisecond * 100}, nil
-	// 	}
-	// }
 
 	// 3) deal with the Cluster Service object
 	// Define the desired cluster Service object
