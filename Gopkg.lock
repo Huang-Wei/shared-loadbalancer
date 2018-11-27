@@ -8,12 +8,25 @@
   version = "v0.30.0"
 
 [[projects]]
+  name = "github.com/Azure/azure-sdk-for-go"
+  packages = [
+    ".",
+    "services/network/mgmt/2017-09-01/network",
+    "version"
+  ]
+  revision = "da91af54816b4cf72949c225a2d0980f51fab01b"
+  version = "v21.3.0"
+
+[[projects]]
   name = "github.com/Azure/go-autorest"
   packages = [
     "autorest",
     "autorest/adal",
     "autorest/azure",
+    "autorest/azure/auth",
     "autorest/date",
+    "autorest/to",
+    "autorest/validation",
     "version"
   ]
   revision = "bca49d5b51a50dc5bb17bbf6204c711c6dbded06"
@@ -44,10 +57,13 @@
     "internal/sdkuri",
     "internal/shareddefaults",
     "private/protocol",
+    "private/protocol/ec2query",
     "private/protocol/query",
     "private/protocol/query/queryutil",
     "private/protocol/rest",
     "private/protocol/xml/xmlutil",
+    "service/ec2",
+    "service/elb",
     "service/sts"
   ]
   revision = "9a79cc876234949427d966249a09fc98e7864bde"
@@ -64,6 +80,12 @@
   packages = ["."]
   revision = "06ea1031745cb8b3dab3f6a236daf2b0aa468b7e"
   version = "v3.2.0"
+
+[[projects]]
+  name = "github.com/dimchansky/utfbom"
+  packages = ["."]
+  revision = "5448fe645cb1964ba70ac8f9f2ffe975e61a536c"
+  version = "v1.0.0"
 
 [[projects]]
   name = "github.com/emicklei/go-restful"
@@ -375,7 +397,11 @@
 [[projects]]
   branch = "master"
   name = "golang.org/x/crypto"
-  packages = ["ssh/terminal"]
+  packages = [
+    "pkcs12",
+    "pkcs12/internal/rc2",
+    "ssh/terminal"
+  ]
   revision = "0c41d7ab0a0ee717d4590a44bcb987dfd9e183eb"
 
 [[projects]]
@@ -780,6 +806,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "b31d42fbdab214405ba679d0273c9c0ebf7370cc4d81f05cab657aa266a53dc7"
+  inputs-digest = "99d63d81a964caeb2236a08d5927f5557c393b10c8ddf0d2bbb3940391dfd4c9"
   solver-name = "gps-cdcl"
   solver-version = 1
