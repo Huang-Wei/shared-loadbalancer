@@ -41,6 +41,9 @@ import (
 // * https://docs.microsoft.com/en-us/azure/aks/kubernetes-service-principal
 
 const (
+	loadBalancerMinimumPriority = 500
+	loadBalancerMaximumPriority = 4096
+
 	frontendIPConfigIDTemplate = "/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Network/loadBalancers/%s/frontendIPConfigurations/%s"
 	backendPoolIDTemplate      = "/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Network/loadBalancers/%s/backendAddressPools/%s"
 )
@@ -327,9 +330,7 @@ func (a *AKS) reconcileLBRules(clusterSvc, lbSvc *corev1.Service, wantCreate boo
 				BackendAddressPool: &network.SubResource{
 					ID: &lbBackendPoolID,
 				},
-				// Probe: &network.SubResource{
-				// 	ID: ,
-				// },
+				// Probe is unnecessary
 			},
 		}
 		lbRules = append(lbRules, lbRule)
@@ -337,13 +338,13 @@ func (a *AKS) reconcileLBRules(clusterSvc, lbSvc *corev1.Service, wantCreate boo
 
 	var needUpdate bool
 	if wantCreate {
-		log.WithName("aks").Info("[DEBUG] before unionLBRules", "existing", len(*azureLB.LoadBalancingRules), "incoming", len(lbRules))
+		// log.WithName("aks").Info("[DEBUG] before unionLBRules", "existing", len(*azureLB.LoadBalancingRules), "incoming", len(lbRules))
 		needUpdate, updatedLBRules = unionLBRules(*azureLB.LoadBalancingRules, lbRules)
-		log.WithName("aks").Info("[DEBUG] after unionLBRules", "existing", len(*azureLB.LoadBalancingRules), "updatedLBRules", len(updatedLBRules))
+		// log.WithName("aks").Info("[DEBUG] after unionLBRules", "existing", len(*azureLB.LoadBalancingRules), "updatedLBRules", len(updatedLBRules))
 	} else {
-		log.WithName("aks").Info("[DEBUG] before subtractLBRules", "existing", len(*azureLB.LoadBalancingRules), "incoming", len(lbRules))
+		// log.WithName("aks").Info("[DEBUG] before subtractLBRules", "existing", len(*azureLB.LoadBalancingRules), "incoming", len(lbRules))
 		needUpdate, updatedLBRules = subtractLBRules(*azureLB.LoadBalancingRules, lbRules)
-		log.WithName("aks").Info("[DEBUG] after subtractLBRules", "existing", len(*azureLB.LoadBalancingRules), "updatedLBRules", len(updatedLBRules))
+		// log.WithName("aks").Info("[DEBUG] after subtractLBRules", "existing", len(*azureLB.LoadBalancingRules), "updatedLBRules", len(updatedLBRules))
 	}
 
 	if !needUpdate {
@@ -371,10 +372,14 @@ func (a *AKS) reconcileSGRules(clusterSvc, lbSvc *corev1.Service, wantCreate boo
 		if err != nil {
 			return err
 		}
+		if err != nil {
+			return err
+		}
 		sgRule := network.SecurityRule{
 			Name: to.StringPtr(fmt.Sprintf("%s-%s-%d-Internet", lbFrontendIPConfigName, p.Protocol, p.Port)),
 			SecurityRulePropertiesFormat: &network.SecurityRulePropertiesFormat{
-				Protocol:                 *securityProto,
+				Protocol: *securityProto,
+				// Priority:                 to.Int32Ptr(nextPriority),
 				SourceAddressPrefix:      to.StringPtr("Internet"),
 				SourcePortRange:          to.StringPtr("*"),
 				DestinationAddressPrefix: to.StringPtr("*"),
@@ -387,18 +392,29 @@ func (a *AKS) reconcileSGRules(clusterSvc, lbSvc *corev1.Service, wantCreate boo
 	}
 	var needUpdate bool
 	if wantCreate {
-		log.WithName("aks").Info("[DEBUG] before unionSGRules", "existing", len(*sg.SecurityRules), "incoming", len(sgRules))
+		// log.WithName("aks").Info("[DEBUG] before unionSGRules", "existing", len(*sg.SecurityRules), "incoming", len(sgRules))
 		needUpdate, updatedSGRules = unionSGRules(*sg.SecurityRules, sgRules)
-		log.WithName("aks").Info("[DEBUG] after unionSGRules", "existing", len(*sg.SecurityRules), "updatedSGRules", len(updatedSGRules))
+		// log.WithName("aks").Info("[DEBUG] after unionSGRules", "existing", len(*sg.SecurityRules), "updatedSGRules", len(updatedSGRules))
 	} else {
-		log.WithName("aks").Info("[DEBUG] before subtractSGRules", "existing", len(*sg.SecurityRules), "incoming", len(sgRules))
+		// log.WithName("aks").Info("[DEBUG] before subtractSGRules", "existing", len(*sg.SecurityRules), "incoming", len(sgRules))
 		needUpdate, updatedSGRules = subtractSGRules(*sg.SecurityRules, sgRules)
-		log.WithName("aks").Info("[DEBUG] after subtractSGRules", "existing", len(*sg.SecurityRules), "updatedSGRules", len(updatedSGRules))
+		// log.WithName("aks").Info("[DEBUG] after subtractSGRules", "existing", len(*sg.SecurityRules), "updatedSGRules", len(updatedSGRules))
 	}
 
 	if !needUpdate {
 		log.WithName("aks").Info("No need to reconcile SG inbound rules")
 		return nil
+	}
+	for i := range updatedSGRules {
+		rule := updatedSGRules[i]
+		if rule.Priority != nil {
+			continue
+		}
+		nextPriority, err := getNextAvailablePriority(updatedSGRules)
+		if err != nil {
+			return err
+		}
+		rule.Priority = to.Int32Ptr(nextPriority)
 	}
 	// create or update SG
 	sg.SecurityRules = &updatedSGRules
@@ -458,7 +474,6 @@ func findRule(rules []network.LoadBalancingRule, rule network.LoadBalancingRule)
 }
 
 // equalLoadBalancingRulePropertiesFormat checks whether the provided LoadBalancingRulePropertiesFormat are equal.
-// Note: only fields used in reconcileLoadBalancer are considered.
 func equalLoadBalancingRulePropertiesFormat(s, t *network.LoadBalancingRulePropertiesFormat) bool {
 	if s == nil || t == nil {
 		return false
@@ -520,9 +535,6 @@ func getProtocolsFromKubernetesProtocol(protocol corev1.Protocol) (*network.Tran
 }
 
 // This compares rule's Name, Protocol, SourcePortRange, DestinationPortRange, SourceAddressPrefix, Access, and Direction.
-// Note that it compares rule's DestinationAddressPrefix only when it's not consolidated rule as such rule does not have DestinationAddressPrefix defined.
-// We intentionally do not compare DestinationAddressPrefixes in consolidated case because reconcileSecurityRule has to consider the two rules equal,
-// despite different DestinationAddressPrefixes, in order to give it a chance to consolidate the two rules.
 func findSecurityRule(rules []network.SecurityRule, rule network.SecurityRule) bool {
 	for _, existingRule := range rules {
 		if !strings.EqualFold(to.String(existingRule.Name), to.String(rule.Name)) {
@@ -540,11 +552,6 @@ func findSecurityRule(rules []network.SecurityRule, rule network.SecurityRule) b
 		if !strings.EqualFold(to.String(existingRule.SourceAddressPrefix), to.String(rule.SourceAddressPrefix)) {
 			continue
 		}
-		// if !allowsConsolidation(existingRule) && !allowsConsolidation(rule) {
-		// 	if !strings.EqualFold(to.String(existingRule.DestinationAddressPrefix), to.String(rule.DestinationAddressPrefix)) {
-		// 		continue
-		// 	}
-		// }
 		if existingRule.Access != rule.Access {
 			continue
 		}
@@ -554,4 +561,27 @@ func findSecurityRule(rules []network.SecurityRule, rule network.SecurityRule) b
 		return true
 	}
 	return false
+}
+
+// This returns the next available rule priority level for a given set of security rules.
+func getNextAvailablePriority(rules []network.SecurityRule) (int32, error) {
+	var smallest int32 = loadBalancerMinimumPriority
+	var spread int32 = 1
+
+outer:
+	for smallest < loadBalancerMaximumPriority {
+		for _, rule := range rules {
+			if rule.Priority == nil {
+				continue
+			}
+			if *rule.Priority == smallest {
+				smallest += spread
+				continue outer
+			}
+		}
+		// no one else had it
+		return smallest, nil
+	}
+
+	return -1, fmt.Errorf("securityGroup priorities are exhausted")
 }
