@@ -17,25 +17,53 @@ limitations under the Licensa.
 package providers
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"reflect"
+	"strings"
 
 	"github.com/Azure/azure-sdk-for-go/services/network/mgmt/2017-09-01/network"
 	"github.com/Azure/go-autorest/autorest/azure/auth"
+	"github.com/Azure/go-autorest/autorest/to"
 	kubeconv1alpha1 "github.com/Huang-Wei/shared-loadbalancer/pkg/apis/kubecon/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	cloudprovider "k8s.io/cloud-provider"
+)
+
+// Refs:
+// * https://github.com/Azure/azure-sdk-for-go
+// * https://github.com/Azure-Samples/azure-sdk-for-go-samples
+// * https://docs.microsoft.com/en-us/azure/azure-stack/user/azure-stack-version-profiles-go
+// * https://docs.microsoft.com/en-us/azure/aks/kubernetes-service-principal
+
+const (
+	frontendIPConfigIDTemplate = "/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Network/loadBalancers/%s/frontendIPConfigurations/%s"
+	backendPoolIDTemplate      = "/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Network/loadBalancers/%s/backendAddressPools/%s"
+)
+
+var (
+	azureDefaultLBName = "kubernetes"
+	azureLbIdPrefix    string
 )
 
 // AKS stands for Azure(Microsoft) Kubernetes Service
 type AKS struct {
-	lbClient      network.LoadBalancersClient
-	lbProbeClient network.LoadBalancerProbesClient
-	sgClient      network.SecurityGroupsClient
+	resGrpName     string
+	subscriptionID string
+	lbClient       network.LoadBalancersClient
+	lbFIPClient    network.LoadBalancerFrontendIPConfigurationsClient
+	lbRuleClient   network.LoadBalancerLoadBalancingRulesClient
+	lbProbeClient  network.LoadBalancerProbesClient
+	sgClient       network.SecurityGroupsClient
+	pipClient      network.PublicIPAddressesClient
 
 	// key is namespacedName of a LB Serivce, val is the service
-	cacheMap map[types.NamespacedName]*corev1.Service
-	// cacheELB map[types.NamespacedName]*elb.LoadBalancerDescription
+	cacheMap            map[types.NamespacedName]*corev1.Service
+	cachePIPMap         map[types.NamespacedName]*network.PublicIPAddress
+	cacheAzureDefaultLB *network.LoadBalancer
 
 	// cr to LB is 1:1 mapping
 	crToLB map[types.NamespacedName]types.NamespacedName
@@ -52,25 +80,36 @@ var _ LBProvider = &AKS{}
 func newAKSProvider() *AKS {
 	// TODO(Huang-Wei): make it configurable
 	subscriptionID := "58de4ac8-a2d6-499b-b983-6f1c870d398e"
+	// don't need to if running this program in an Azure vm
 	authorizer, err := auth.NewAuthorizerFromEnvironment()
 	if err != nil {
 		panic(err)
 	}
 
 	aks := AKS{
-		lbClient:      network.NewLoadBalancersClient(subscriptionID),
-		lbProbeClient: network.NewLoadBalancerProbesClient(subscriptionID),
-		sgClient:      network.NewSecurityGroupsClient(subscriptionID),
-		cacheMap:      make(map[types.NamespacedName]*corev1.Service),
-		// cacheELB:      make(map[types.NamespacedName]*elb.LoadBalancerDescription),
-		crToLB:        make(map[types.NamespacedName]types.NamespacedName),
-		lbToCRs:       make(map[types.NamespacedName]nameSet),
-		lbToPorts:     make(map[types.NamespacedName]int32Set),
-		capacityPerLB: capacity,
+		// TODO(Huang-Wei): get it from node label kubernetes.azure.com/cluster
+		resGrpName:     "MC_res-grp-1_wei-aks_eastus",
+		subscriptionID: subscriptionID,
+		lbClient:       network.NewLoadBalancersClient(subscriptionID),
+		lbFIPClient:    network.NewLoadBalancerFrontendIPConfigurationsClient(subscriptionID),
+		lbRuleClient:   network.NewLoadBalancerLoadBalancingRulesClient(subscriptionID),
+		lbProbeClient:  network.NewLoadBalancerProbesClient(subscriptionID),
+		pipClient:      network.NewPublicIPAddressesClient(subscriptionID),
+		sgClient:       network.NewSecurityGroupsClient(subscriptionID),
+		cacheMap:       make(map[types.NamespacedName]*corev1.Service),
+		cachePIPMap:    make(map[types.NamespacedName]*network.PublicIPAddress),
+		crToLB:         make(map[types.NamespacedName]types.NamespacedName),
+		lbToCRs:        make(map[types.NamespacedName]nameSet),
+		lbToPorts:      make(map[types.NamespacedName]int32Set),
+		capacityPerLB:  capacity,
 	}
 	aks.lbClient.Authorizer = authorizer
+	aks.lbFIPClient.Authorizer = authorizer
 	aks.lbProbeClient.Authorizer = authorizer
 	aks.sgClient.Authorizer = authorizer
+	aks.pipClient.Authorizer = authorizer
+
+	azureLbIdPrefix = fmt.Sprintf("/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Network/loadBalancers", subscriptionID, aks.resGrpName)
 	return &aks
 }
 
@@ -81,19 +120,20 @@ func (a *AKS) GetCapacityPerLB() int {
 func (a *AKS) UpdateCache(key types.NamespacedName, lbSvc *corev1.Service) {
 	if lbSvc == nil {
 		delete(a.cacheMap, key)
-		// delete(a.cacheELB, key)
+		delete(a.cachePIPMap, key)
+		// TODO(Huang-Wei): remove cacheAzureDefaultLB when necessary, and ensure it's in sync
+		// with Azure server side
 	} else {
 		a.cacheMap[key] = lbSvc
-		// handle ELB stuff
+		// handle azure public/frontend ip
 		if len(lbSvc.Status.LoadBalancer.Ingress) == 1 {
-			// hostname := lbSvc.Status.LoadBalancer.Ingress[0].Hostname
-			// elbName := strings.Split(strings.Split(hostname, ".")[0], "-")[0]
-			// if result, err := a.queryELB(elbName); err != nil {
-			// 	log.WithName("aks").Error(err, "cannot query ELB", "key", key, "elbName", elbName)
-			// } else {
-			// 	log.WithName("aks").Info("ELB obj is updated in local cache", "key", key, "elbName", elbName)
-			// 	a.cacheELB[key] = result
-			// }
+			pip := lbSvc.Status.LoadBalancer.Ingress[0].IP
+			if result, err := a.queryPublicIP(pip, lbSvc); err != nil {
+				log.WithName("aks").Error(err, "cannot query public ip", "pip", pip)
+			} else {
+				log.WithName("aks").Info("pip object is updated in local cache", "key", key, "pip", pip)
+				a.cachePIPMap[key] = result
+			}
 		}
 	}
 }
@@ -156,8 +196,26 @@ OUTERLOOP:
 }
 
 func (a *AKS) AssociateLB(crName, lbName types.NamespacedName, clusterSvc *corev1.Service) error {
-	// a) create LoadBalancer listener (create-load-balancer-listeners)
-	// b) create inbound rules to security group (authorize-security-group-ingress)
+	// a) create Azure LoadBalancer FrontendIP rule (az network lb rule create)
+	// b) create Azure Network Security Group rule (az network nsg rule create)
+	if clusterSvc != nil {
+		pip, lbSvc := a.cachePIPMap[lbName], a.cacheMap[lbName]
+		if pip != nil && lbSvc != nil {
+			_, err := a.reconcileLBRules(clusterSvc, lbSvc, true /* create */)
+			if err != nil {
+				return err
+			}
+			// TODO(Huang-Wei): create nag rules
+		}
+		// upon program starts, a.lbToPorts[lbName] can be nil
+		if a.lbToPorts[lbName] == nil {
+			a.lbToPorts[lbName] = int32Set{}
+		}
+		// update crToPorts
+		for _, svcPort := range clusterSvc.Spec.Ports {
+			a.lbToPorts[lbName][svcPort.Port] = struct{}{}
+		}
+	}
 	// if clusterSvc != nil {
 	// 	if elbDesc := a.cacheELB[lbName]; elbDesc != nil {
 	// 		executed, err := a.createListeners(clusterSvc, elbDesc)
@@ -169,14 +227,6 @@ func (a *AKS) AssociateLB(crName, lbName types.NamespacedName, clusterSvc *corev
 	// 				return err
 	// 			}
 	// 		}
-	// 	}
-	// 	// upon program starts, a.lbToPorts[lbName] can be nil
-	// 	if a.lbToPorts[lbName] == nil {
-	// 		a.lbToPorts[lbName] = int32Set{}
-	// 	}
-	// 	// update crToPorts
-	// 	for _, svcPort := range clusterSvc.Spec.Ports {
-	// 		a.lbToPorts[lbName][svcPort.Port] = struct{}{}
 	// 	}
 	// }
 
@@ -193,16 +243,26 @@ func (a *AKS) AssociateLB(crName, lbName types.NamespacedName, clusterSvc *corev
 	return nil
 }
 
-// DeassociateLB is called by EKS finalizer to clean listeners
-// and inbound rules of security group
+// DeassociateLB is called by AKS finalizer to clean frontend ip rules
+// and network security group rules
 func (a *AKS) DeassociateLB(crName types.NamespacedName, clusterSvc *corev1.Service) error {
 	lbName, ok := a.crToLB[crName]
 	if !ok {
 		return nil
 	}
 
-	// a) remove LoadBalancer listener (delete-load-balancer-listeners)
-	// b) remove inbound rules from security group (revoke-security-group-ingress)
+	// a) delete Azure LoadBalancer FrontendIP rule (az network lb rule delete)
+	// b) delete Azure Network Security Group rule (az network nsg rule delete)
+	if pip := a.cachePIPMap[lbName]; pip != nil {
+		pip, lbSvc := a.cachePIPMap[lbName], a.cacheMap[lbName]
+		if pip != nil && lbSvc != nil {
+			_, err := a.reconcileLBRules(clusterSvc, lbSvc, false /* delete */)
+			if err != nil {
+				return err
+			}
+		}
+		// TODO(Huang-Wei): remove nsg rules
+	}
 	// if elbDesc := a.cacheELB[lbName]; elbDesc != nil {
 	// 	if err := a.removeListeners(clusterSvc, elbDesc); err != nil {
 	// 		return err
@@ -233,6 +293,38 @@ func (a *AKS) UpdateService(svc, lb *corev1.Service) (bool, bool) {
 	return portUpdated, false
 }
 
+// TODO(Huang-Wei): might need to query it everytime, instead of of maintaining a cache
+func (a *AKS) ensureDefaultAzureLB() error {
+	if a.cacheAzureDefaultLB != nil {
+		return nil
+	}
+	lb, err := a.lbClient.Get(context.TODO(), a.resGrpName, azureDefaultLBName, "")
+	if err != nil {
+		return err
+	}
+	a.cacheAzureDefaultLB = &lb
+	return nil
+}
+
+func (a *AKS) getDefaultAzureLB() (*network.LoadBalancer, error) {
+	azureLB, err := a.lbClient.Get(context.TODO(), a.resGrpName, azureDefaultLBName, "")
+	if err != nil {
+		return nil, err
+	}
+	// a.cacheAzureDefaultLB = &azureLB // maybe don't cache defaultLB
+	return &azureLB, nil
+}
+
+func (a *AKS) queryPublicIP(pipName string, lbSvc *corev1.Service) (*network.PublicIPAddress, error) {
+	if pipName == "" {
+		return nil, errors.New("public ip cannot be empty")
+	}
+
+	lbFrontendIPConfigName := cloudprovider.DefaultLoadBalancerName(lbSvc)
+	publicIP, err := a.pipClient.Get(context.TODO(), a.resGrpName, fmt.Sprintf("%s-%s", azureDefaultLBName, lbFrontendIPConfigName), "")
+	return &publicIP, err
+}
+
 // func (a *AKS) queryELB(elbName string) (*elb.LoadBalancerDescription, error) {
 // 	if elbName == "" {
 // 		return nil, errors.New("elbName cannot be empty")
@@ -254,44 +346,77 @@ func (a *AKS) UpdateService(svc, lb *corev1.Service) (bool, bool) {
 
 // 1st return value means if it's executed
 // 2nd return value returns error if it's executed
-// func (a *AKS) createListeners(clusterSvc *corev1.Service, elbDesc *elb.LoadBalancerDescription) (bool, error) {
-// 	if clusterSvc == nil || elbDesc == nil {
-// 		return false, errors.New("clusterSvc or elbDesc is nil")
-// 	}
-// 	listeners := make([]*elb.Listener, 0)
-// 	for _, p := range clusterSvc.Spec.Ports {
-// 		lowercasedProtocol := strings.ToLower(string(p.Protocol))
-// 		listener := elb.Listener{
-// 			InstancePort:     aws.Int64(int64(p.NodePort)),
-// 			InstanceProtocol: aws.String(lowercasedProtocol),
-// 			LoadBalancerPort: aws.Int64(int64(p.Port)),
-// 			Protocol:         aws.String(lowercasedProtocol),
-// 			// TODO(Huang-Wei): InstanceProtocol vs. Protocol?
-// 		}
-// 		// check if it exists in elbDesc
-// 		if isListenerExisted(listener, elbDesc.ListenerDescriptions) {
-// 			continue
-// 		}
-// 		listeners = append(listeners, &listener)
-// 	}
-// 	if len(listeners) == 0 {
-// 		return false, nil
-// 	}
+func (a *AKS) reconcileLBRules(clusterSvc, lbSvc *corev1.Service, wantCreate bool /*, pip *network.PublicIPAddress */) (bool, error) {
+	azureLB, err := a.getDefaultAzureLB()
+	if err != nil {
+		// we don't create Azure LoadBalancer from scratch - it's owned by AKS cloud provider
+		return false, err
+	}
+	lbFrontendIPConfigName := cloudprovider.DefaultLoadBalancerName(lbSvc)
+	lbFrontendIPConfigID := a.getFrontendIPConfigID(*azureLB.Name, lbFrontendIPConfigName)
+	// TODO(Huang-Wei): in AKS cloud provider code, it's using `clusterName`
+	lbBackendPoolName := azureDefaultLBName
+	lbBackendPoolID := a.getBackendPoolID(*azureLB.Name, lbBackendPoolName)
 
-// 	input := &elb.CreateLoadBalancerListenersInput{
-// 		Listeners:        listeners,
-// 		LoadBalancerName: elbDesc.LoadBalancerName,
-// 	}
-// 	_, err := a.elbClient.CreateLoadBalancerListeners(input)
+	// reconcile rules
+	lbRules := make([]network.LoadBalancingRule, 0)
+	var updatedLBRules []network.LoadBalancingRule
+	for _, p := range clusterSvc.Spec.Ports {
+		lbRule := network.LoadBalancingRule{
+			// it's required to be consistent with AKS cloud provider naming pattern
+			Name: to.StringPtr(fmt.Sprintf("%s-%s-%d", lbFrontendIPConfigName, p.Protocol, p.Port)),
+			LoadBalancingRulePropertiesFormat: &network.LoadBalancingRulePropertiesFormat{
+				// TODO(Huang-Wei): change to p.Protocol
+				Protocol:             network.TransportProtocolTCP,
+				FrontendPort:         to.Int32Ptr(p.Port),
+				BackendPort:          to.Int32Ptr(p.NodePort),
+				IdleTimeoutInMinutes: to.Int32Ptr(4),
+				EnableFloatingIP:     to.BoolPtr(false),
+				LoadDistribution:     network.Default,
+				FrontendIPConfiguration: &network.SubResource{
+					ID: &lbFrontendIPConfigID,
+				},
+				BackendAddressPool: &network.SubResource{
+					ID: &lbBackendPoolID,
+				},
+				// Probe: &network.SubResource{
+				// 	ID: to.StringPtr(fmt.Sprintf("/%s/%s/probes/%s", idPrefix, lbName, probeName)),
+				// },
+			},
+		}
+		lbRules = append(lbRules, lbRule)
+	}
 
-// 	// tolerate if the listener exists in server side
-// 	if aerr, ok := err.(awserr.Error); ok && aerr.Code() == elb.ErrCodeDuplicateListenerException {
-// 		log.WithName("aks").Info("awserr", "code", aerr.Code())
-// 		return true, nil
-// 	}
+	if wantCreate {
+		log.WithName("aks").Info("[DEBUG] before union", "existing", len(*azureLB.LoadBalancingRules), "incoming", len(lbRules))
+		updatedLBRules = union(*azureLB.LoadBalancingRules, lbRules)
+		log.WithName("aks").Info("[DEBUG] after union", "existing", len(*azureLB.LoadBalancingRules), "updatedLBRules", len(updatedLBRules))
+	} else {
+		log.WithName("aks").Info("[DEBUG] before subtract", "existing", len(*azureLB.LoadBalancingRules), "incoming", len(lbRules))
+		updatedLBRules = subtract(*azureLB.LoadBalancingRules, lbRules)
+		log.WithName("aks").Info("[DEBUG] after subtract", "existing", len(*azureLB.LoadBalancingRules), "updatedLBRules", len(updatedLBRules))
+	}
 
-// 	return true, err
-// }
+	if len(updatedLBRules) == len(lbRules) {
+		log.WithName("aks").Info("No need to reconcile LB rules")
+		return false, nil
+	}
+	azureLB.LoadBalancingRules = &updatedLBRules
+	_, err = a.lbClient.CreateOrUpdate(context.TODO(), a.resGrpName, *azureLB.Name, *azureLB)
+	return true, err
+}
+
+func isLBRuleExisted(lbRule network.LoadBalancingRule, existingRules []network.LoadBalancingRule) bool {
+	if existingRules == nil {
+		return false
+	}
+	for _, existing := range existingRules {
+		if *lbRule.Name == *existing.Name {
+			return true
+		}
+	}
+	return false
+}
 
 // func isListenerExisted(l elb.Listener, listenerDescs []*elb.ListenerDescription) bool {
 // 	for _, desc := range listenerDescs {
@@ -403,3 +528,67 @@ func (a *AKS) UpdateService(svc, lb *corev1.Service) (bool, bool) {
 // 	_, err := a.ec2Client.RevokeSecurityGroupIngress(input)
 // 	return err
 // }
+
+func (a *AKS) getFrontendIPConfigID(lbName, backendPoolName string) string {
+	return fmt.Sprintf(
+		frontendIPConfigIDTemplate,
+		a.subscriptionID,
+		a.resGrpName,
+		lbName,
+		backendPoolName)
+}
+
+func (a *AKS) getBackendPoolID(lbName, backendPoolName string) string {
+	return fmt.Sprintf(
+		backendPoolIDTemplate,
+		a.subscriptionID,
+		a.resGrpName,
+		lbName,
+		backendPoolName)
+}
+
+func union(existingRules, expectedRules []network.LoadBalancingRule) []network.LoadBalancingRule {
+	toAddRules := make([]network.LoadBalancingRule, 0)
+	for _, expected := range expectedRules {
+		if !findRule(existingRules, expected) {
+			toAddRules = append(toAddRules, expected)
+		}
+	}
+	return append(existingRules, toAddRules...)
+}
+
+func subtract(existingRules, unexpectedRules []network.LoadBalancingRule) []network.LoadBalancingRule {
+	for i := len(existingRules) - 1; i >= 0; i-- {
+		if findRule(unexpectedRules, existingRules[i]) {
+			existingRules = append(existingRules[:i], existingRules[i+1:]...)
+		}
+	}
+	return existingRules
+}
+
+func findRule(rules []network.LoadBalancingRule, rule network.LoadBalancingRule) bool {
+	for _, existingRule := range rules {
+		if strings.EqualFold(to.String(existingRule.Name), to.String(rule.Name)) &&
+			equalLoadBalancingRulePropertiesFormat(existingRule.LoadBalancingRulePropertiesFormat, rule.LoadBalancingRulePropertiesFormat) {
+			return true
+		}
+	}
+	return false
+}
+
+// equalLoadBalancingRulePropertiesFormat checks whether the provided LoadBalancingRulePropertiesFormat are equal.
+// Note: only fields used in reconcileLoadBalancer are considered.
+func equalLoadBalancingRulePropertiesFormat(s, t *network.LoadBalancingRulePropertiesFormat) bool {
+	if s == nil || t == nil {
+		return false
+	}
+
+	return reflect.DeepEqual(s.Protocol, t.Protocol) &&
+		reflect.DeepEqual(s.FrontendIPConfiguration, t.FrontendIPConfiguration) &&
+		reflect.DeepEqual(s.BackendAddressPool, t.BackendAddressPool) &&
+		reflect.DeepEqual(s.LoadDistribution, t.LoadDistribution) &&
+		reflect.DeepEqual(s.FrontendPort, t.FrontendPort) &&
+		reflect.DeepEqual(s.BackendPort, t.BackendPort) &&
+		reflect.DeepEqual(s.EnableFloatingIP, t.EnableFloatingIP) &&
+		reflect.DeepEqual(s.IdleTimeoutInMinutes, t.IdleTimeoutInMinutes)
+}
