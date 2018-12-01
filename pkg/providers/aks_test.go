@@ -25,7 +25,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/services/network/mgmt/2017-09-01/network"
 )
 
-func Test_union(t *testing.T) {
+func TestUnionLBRules(t *testing.T) {
 	tests := []struct {
 		name          string
 		existingRules []network.LoadBalancingRule
@@ -92,14 +92,14 @@ func Test_union(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := union(tt.existingRules, tt.expectedRules); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("union() = %v, want %v", got, tt.want)
+			if _, got := unionLBRules(tt.existingRules, tt.expectedRules); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("unionLBRules() = %v, want %v", got, tt.want)
 			}
 		})
 	}
 }
 
-func Test_subtract(t *testing.T) {
+func TestSubtractLBRules(t *testing.T) {
 	tests := []struct {
 		name            string
 		existingRules   []network.LoadBalancingRule
@@ -166,8 +166,8 @@ func Test_subtract(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := subtract(tt.existingRules, tt.unexpectedRules); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("subtract() = %v, want %v", got, tt.want)
+			if _, got := subtractLBRules(tt.existingRules, tt.unexpectedRules); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("subtractLBRules() = %v, want %v", got, tt.want)
 			}
 		})
 	}
