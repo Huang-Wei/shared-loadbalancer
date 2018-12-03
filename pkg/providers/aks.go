@@ -79,9 +79,10 @@ type AKS struct {
 var _ LBProvider = &AKS{}
 
 func newAKSProvider() *AKS {
-	// TODO(Huang-Wei): make it configurable
-	subscriptionID := "58de4ac8-a2d6-499b-b983-6f1c870d398e"
-	// not required if running this program in an Azure vm
+	// TODO(Huang-Wei): auto configure when running inside AKS cluster
+	// for local testing, make sure following env variables are properly set:
+	// AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_SUBSCRIPTION_ID
+	subscriptionID := GetEnvVal("AZURE_SUBSCRIPTION_ID", "58de4ac8-a2d6-499b-b983-6f1c870d398e")
 	authorizer, err := auth.NewAuthorizerFromEnvironment()
 	if err != nil {
 		panic(err)
@@ -90,8 +91,9 @@ func newAKSProvider() *AKS {
 	aks := AKS{
 		subscriptionID: subscriptionID,
 		// TODO(Huang-Wei): get it from node label kubernetes.azure.com/cluster
-		resGrpName:    "MC_res-grp-1_wei-aks_eastus",
-		sgName:        "aks-agentpool-37988249-nsg",
+		resGrpName: GetEnvVal("RES_GRP_NAME", "MC_res-grp-1_wei-aks_eastus"),
+		// TODO(Huang-Wei): read it from?
+		sgName:        GetEnvVal("SG_NAME", "aks-agentpool-37988249-nsg"),
 		lbClient:      network.NewLoadBalancersClient(subscriptionID),
 		pipClient:     network.NewPublicIPAddressesClient(subscriptionID),
 		sgClient:      network.NewSecurityGroupsClient(subscriptionID),
