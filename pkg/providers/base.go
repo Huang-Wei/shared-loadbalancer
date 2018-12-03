@@ -17,6 +17,8 @@ limitations under the License.
 package providers
 
 import (
+	"os"
+
 	kubeconv1alpha1 "github.com/Huang-Wei/shared-loadbalancer/pkg/apis/kubecon/v1alpha1"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -54,9 +56,15 @@ func NewProvider() LBProvider {
 		provider = newIKSProvider()
 	case "eks":
 		provider = newEKSProvider()
+	case "aks":
+		provider = newAKSProvider()
 	case "local":
 		provider = newLocalProvider()
+	default:
+		log.Info("Unsupported provider", "provider", providerStr)
+		os.Exit(1)
 	}
+
 	return provider
 }
 

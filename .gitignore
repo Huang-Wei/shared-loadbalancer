@@ -1,3 +1,5 @@
+# Azure local testing config file
+.env
 
 # Binaries for programs and plugins
 *.exe

@@ -48,3 +48,7 @@ revision = "bca49d5b51a50dc5bb17bbf6204c711c6dbded06"
 [[constraint]]
   name = "github.com/aws/aws-sdk-go"
   version = "1.15.61"
+
+[[constraint]]
+  name = "github.com/Azure/azure-sdk-for-go"
+  version = "21.3.0"
