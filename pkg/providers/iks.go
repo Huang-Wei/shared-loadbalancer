@@ -108,7 +108,7 @@ func (i *IKS) GetAvailabelLB(clusterSvc *corev1.Service) *corev1.Service {
 	// we leverage the randomness of golang "for range" when iterating
 OUTERLOOP:
 	for lbKey, lbSvc := range i.cacheMap {
-		if len(i.lbToCRs[lbKey]) >= i.capacityPerLB {
+		if len(i.lbToCRs[lbKey]) >= i.capacityPerLB || len(lbSvc.Status.LoadBalancer.Ingress) == 0 {
 			continue
 		}
 		// must satisfy that all svc ports are not occupied in lbSvc
