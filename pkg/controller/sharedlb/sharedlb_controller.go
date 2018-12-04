@@ -56,9 +56,9 @@ func newReconciler(mgr manager.Manager) reconcile.Reconciler {
 		Client:   mgr.GetClient(),
 		scheme:   mgr.GetScheme(),
 		provider: providers.NewProvider(),
-		pendingQ: &crLBIdxMap{
-			crToLB:  make(map[types.NamespacedName]types.NamespacedName),
-			lbToCRs: make(map[types.NamespacedName]nameSet),
+		pendingQ: &pendingQ{
+			pendingLB:  nil,
+			pendingCRs: make(map[types.NamespacedName]struct{}),
 		},
 	}
 }
@@ -126,14 +126,12 @@ type ReconcileSharedLB struct {
 	client.Client
 	scheme   *runtime.Scheme
 	provider providers.LBProvider
-	pendingQ *crLBIdxMap
+	pendingQ *pendingQ
 }
 
-type nameSet map[types.NamespacedName]struct{}
-
-type crLBIdxMap struct {
-	crToLB  map[types.NamespacedName]types.NamespacedName
-	lbToCRs map[types.NamespacedName]nameSet
+type pendingQ struct {
+	pendingLB  *types.NamespacedName
+	pendingCRs map[types.NamespacedName]struct{}
 }
 
 // Reconcile reads that state of the cluster for a SharedLB object and makes changes based on the state read
@@ -165,9 +163,9 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 	// we rely on an internal struct "pendingQ" to tell whether incoming CR obj should
 	// a) be put back to queue or b) be processed instantly
 	if r.pendingQ.hasCR(request.NamespacedName) {
-		log.Info("It's likely dependent IaaS LoadBalancer is pending. Wait for 1 second and retry.", "request", request.NamespacedName)
+		log.Info("It's likely a dependent IaaS LoadBalancer is pending. Requeue to wait for its completion and retry.", "request", request.NamespacedName)
 		// TODO(Huang-Wei): implement exponential backoff
-		return reconcile.Result{Requeue: true, RequeueAfter: time.Second * 1}, nil
+		return reconcile.Result{Requeue: true, RequeueAfter: time.Second * 2}, nil
 	}
 
 	// 2) fetch and deal with the SharedLB CR object
@@ -247,6 +245,10 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 		// fetch an available LoadBalancer Service that can be reused
 		availableLB := r.provider.GetAvailabelLB(clusterSvc)
 		if availableLB == nil {
+			if !r.pendingQ.isEmpty() {
+				r.pendingQ.add(request.NamespacedName, types.NamespacedName{})
+				return reconcile.Result{Requeue: true, RequeueAfter: time.Second * 2}, nil
+			}
 			log.Info("Creating a real LoadBalancer Service")
 			availableLB = r.provider.NewLBService()
 			err = r.Create(context.TODO(), availableLB)
@@ -298,28 +300,29 @@ func (r *ReconcileSharedLB) Reconcile(request reconcile.Request) (reconcile.Resu
 	return reconcile.Result{}, nil
 }
 
-func (idxMap *crLBIdxMap) add(crName, lbName types.NamespacedName) {
-	idxMap.crToLB[crName] = lbName
-	if idxMap.lbToCRs[lbName] == nil {
-		idxMap.lbToCRs[lbName] = make(nameSet)
+func (pq *pendingQ) add(crName, lbName types.NamespacedName) {
+	if pq.pendingLB == nil {
+		pq.pendingLB = &lbName
 	}
-	idxMap.lbToCRs[lbName][crName] = struct{}{}
+	pq.pendingCRs[crName] = struct{}{}
 }
 
-func (idxMap *crLBIdxMap) remove(lbName types.NamespacedName) {
-	for cr := range idxMap.lbToCRs[lbName] {
-		delete(idxMap.crToLB, cr)
-	}
-	delete(idxMap.lbToCRs, lbName)
+func (pq *pendingQ) remove(lbName types.NamespacedName) {
+	pq.pendingLB = nil
+	pq.pendingCRs = make(map[types.NamespacedName]struct{})
 }
 
-func (idxMap *crLBIdxMap) hasCR(crName types.NamespacedName) bool {
-	_, ok := idxMap.crToLB[crName]
+func (pq *pendingQ) hasCR(crName types.NamespacedName) bool {
+	_, ok := pq.pendingCRs[crName]
 	return ok
 }
 
-func (idxMap *crLBIdxMap) hasLB(lbName types.NamespacedName) bool {
-	return len(idxMap.lbToCRs[lbName]) != 0
+func (pq *pendingQ) hasLB(lbName types.NamespacedName) bool {
+	return pq.pendingLB != nil && *pq.pendingLB == lbName
+}
+
+func (pq *pendingQ) isEmpty() bool {
+	return pq.pendingLB == nil
 }
 
 func containsString(slice []string, s string) bool {
