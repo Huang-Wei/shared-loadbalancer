@@ -58,6 +58,8 @@ func NewProvider() LBProvider {
 		provider = newEKSProvider()
 	case "aks":
 		provider = newAKSProvider()
+	case "gke":
+		provider = newGKEProvider()
 	case "local":
 		provider = newLocalProvider()
 	default:
