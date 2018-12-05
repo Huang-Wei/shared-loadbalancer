@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: udp-deploy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: udp
+  template:
+    metadata:
+      labels:
+        app: udp
+    spec:
+      containers:
+      - name: udp
+        image: hweicdl/netcat-udp:v0.1.0
+        ports:
+        - containerPort: 5000
