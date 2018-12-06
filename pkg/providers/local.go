@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
+// DEPRECATED: only for testing
 type Local struct {
 	// key is namespacedName of a LB Serivce, val is the service
 	cacheMap map[types.NamespacedName]*corev1.Service
