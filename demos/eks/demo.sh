@@ -12,7 +12,7 @@ doit kubectl version --short
 
 doit kubectl get svc
 
-comment We are going to create 4 TCP deployments
+comment "We are going to create some TCP deployments"
 
 doit ls demos/eks/deployments
 doit kubectl create -f demos/eks/deployments/
@@ -21,31 +21,38 @@ comment Custom Resource Definition has been pre-created
 doit kubectl get crd
 doit kubectl get slb
 
-# comment To demo the case LB is out of capacity, we set CAPACITY to 2
+comment To demo the case LB resource is out of capacity, CAPACITY is configured to 2
 doit kubectl create -f demos/eks/crs/cr-tcp1.yaml
-doit kubectl get svc
+# doit kubectl get svc
 
 comment EKS LB needs ~3 seconds to be created
-# wait "kubectl get svc | grep -v pending &> /dev/null"
 doit kubectl get svc
 doit kubectl get slb
+doit kubectl get slb -o custom-columns="NAME:metadata.name,EXTERNAL-IP:.status.loadBalancer.ingress[*].*,PORT:.spec.ports[*].port"
 
 comment "Let's take a look at AWS console"
 
-doit nc $(kubectl get slb | grep sharedlb-tcp | awk '{print $2}') $(kubectl get slb sharedlb-tcp | grep sharedlb-tcp | awk '{print $3}')
-
-comment Now we create the second SharedLB CR
-
 doit kubectl create -f demos/eks/crs/cr-tcp2.yaml
 doit kubectl get svc
-doit kubectl get slb
+doit kubectl get slb -o custom-columns="NAME:metadata.name,EXTERNAL-IP:.status.loadBalancer.ingress[*].*,PORT:.spec.ports[*].port"
 
 comment "As of now, we're out of capacity, so next CR creation is expected to trigger a new LB creation"
 
 doit kubectl create -f demos/eks/crs/cr-tcp3.yaml
-doit wait "kubectl get svc | grep -v pending"
+comment Wait for another 3 seconds
 doit kubectl get svc
-doit kubectl get slb
+doit kubectl get slb -o custom-columns="NAME:metadata.name,EXTERNAL-IP:.status.loadBalancer.ingress[*].*,PORT:.spec.ports[*].port"
+
+comment "Finally let's check connectivity"
+out=$(kubectl get slb -o custom-columns="NAME:metadata.name,EXTERNAL-IP:.status.loadBalancer.ingress[*].*,PORT:.spec.ports[*].port")
+doit nslookup $(echo "$out" | grep sharedlb-tcp1 | awk '{print $2}')
+doit nc -zv $(echo "$out" | grep sharedlb-tcp1 | awk '{print $2}') $(echo "$out" | grep sharedlb-tcp1 | awk '{print $3}')
+
+comment "Let's delete the 1st SharedLB CR"
+doit kubectl delete slb sharedlb-tcp1
+doit kubectl get svc
+doit kubectl get slb -o custom-columns="NAME:metadata.name,EXTERNAL-IP:.status.loadBalancer.ingress[*].*,PORT:.spec.ports[*].port"
+comment "Checkout AWS console again"
 
 # comment Cleanup
 
