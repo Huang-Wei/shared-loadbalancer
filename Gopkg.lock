@@ -81,10 +81,10 @@
   version = "v3.2.0"
 
 [[projects]]
+  branch = "master"
   name = "github.com/dimchansky/utfbom"
   packages = ["."]
-  revision = "5448fe645cb1964ba70ac8f9f2ffe975e61a536c"
-  version = "v1.0.0"
+  revision = "c410c2305b32ec96caea4e24b4ecbf648e2eeb25"
 
 [[projects]]
   name = "github.com/emicklei/go-restful"
@@ -491,6 +491,17 @@
   revision = "def26773749ba304ef17a9d8bf8a148a1dc29018"
 
 [[projects]]
+  branch = "master"
+  name = "google.golang.org/api"
+  packages = [
+    "compute/v1",
+    "gensupport",
+    "googleapi",
+    "googleapi/internal/uritemplates"
+  ]
+  revision = "6142e720c068c6cd71f2258e007ff1991572e1d5"
+
+[[projects]]
   name = "google.golang.org/appengine"
   packages = [
     ".",
@@ -883,6 +894,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "4aa064688cc8112fd6b31a787fddea5d8b0457841175ea81f2eb9caeacfffb4a"
+  inputs-digest = "7311262eff077dfdf48831db5f032e43ff8b6efe48943678d1af804380971653"
   solver-name = "gps-cdcl"
   solver-version = 1

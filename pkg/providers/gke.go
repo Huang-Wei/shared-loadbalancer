@@ -25,14 +25,19 @@ import (
 	kubeconv1alpha1 "github.com/Huang-Wei/shared-loadbalancer/pkg/apis/kubecon/v1alpha1"
 	"golang.org/x/oauth2/google"
 	compute "google.golang.org/api/compute/v1"
+	"google.golang.org/api/googleapi"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 )
 
+// Ref:
+// - gcloud auth application-default login
+// - gcloud auth application-default print-access-token
+
 const PORTRANGE = "30000-32767"
 
-// GKE stands for Google Kubernetes Service
+// GKE stands for Google Kubernetes Engine
 type GKE struct {
 	client          *compute.Service
 	project, region string
@@ -80,44 +85,49 @@ func initGCE() *compute.Service {
 	return computeService
 }
 
-func (i *GKE) GetCapacityPerLB() int {
-	return i.capacityPerLB
+func (g *GKE) GetCapacityPerLB() int {
+	return g.capacityPerLB
 }
 
-func (i *GKE) UpdateCache(key types.NamespacedName, lbSvc *corev1.Service) {
+func (g *GKE) UpdateCache(key types.NamespacedName, lbSvc *corev1.Service) {
 	if lbSvc == nil {
-		delete(i.cacheMap, key)
+		delete(g.cacheMap, key)
 	} else {
 		if len(lbSvc.Status.LoadBalancer.Ingress) > 0 {
-			// Make this IP Static and then add a Forwarding rule
-			i.createStaticIP(lbSvc.ObjectMeta.Name+"-ip", lbSvc.Status.LoadBalancer.Ingress[0].IP)
-			// Let us also create a Forwarding rule to open up all ports.
+			// Make this IP Static and then add an Inbound Firewall Rule
+			g.ensureStaticIP(lbSvc.ObjectMeta.Name+"-ip", lbSvc.Status.LoadBalancer.Ingress[0].IP)
+			// Let us also create an Inbound Firewall Rule to open up all ports.
 			// We can also do each port the slb needs but for now this is good enough.
-			fwRuleName := lbSvc.ObjectMeta.Name + "-rule"
-			lbPool := i.getTargetPool_usingLBName(lbSvc.ObjectMeta.Name)
-			if lbPool == nil {
-				log.WithName("GKE").Info("Cannot find the TargetPool for the LoadBalancer")
-			}
-			i.forwardingRuleInsert(fwRuleName, lbSvc.Status.LoadBalancer.Ingress[0].IP, lbPool.SelfLink)
+			g.ensureFirewall(getLBFirewallRuleName(lbSvc.ObjectMeta.Name))
 		}
-		i.cacheMap[key] = lbSvc
+		g.cacheMap[key] = lbSvc
 	}
 }
 
-func (i *GKE) NewService(sharedLB *kubeconv1alpha1.SharedLB) *corev1.Service {
+func getLBFirewallRuleName(lbName string) string {
+	return fmt.Sprintf("k8s-fw-%s-autogen", lbName)
+}
+
+func getLBForwardRuleName(lbName string, port int32, proto corev1.Protocol) string {
+	// note: proto must be lowered
+	return fmt.Sprintf("%s-fwd-rule-%d-%v-autogen", lbName, port, strings.ToLower(string(proto)))
+}
+
+func (g *GKE) NewService(sharedLB *kubeconv1alpha1.SharedLB) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      sharedLB.Name + SvcPostfix,
 			Namespace: sharedLB.Namespace,
 		},
 		Spec: corev1.ServiceSpec{
+			Type:     corev1.ServiceTypeNodePort,
 			Ports:    sharedLB.Spec.Ports,
 			Selector: sharedLB.Spec.Selector,
 		},
 	}
 }
 
-func (i *GKE) NewLBService() *corev1.Service {
+func (g *GKE) NewLBService() *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "lb-" + RandStringRunes(8),
@@ -138,27 +148,24 @@ func (i *GKE) NewLBService() *corev1.Service {
 				// 	Port:     33333,
 				// },
 			},
-			//			ExternalIPs: []string {
-			//				ipaddress,
-			//			},
 			Type: corev1.ServiceTypeLoadBalancer,
 		},
 	}
 }
 
-func (i *GKE) GetAvailabelLB(clusterSvc *corev1.Service) *corev1.Service {
+func (g *GKE) GetAvailabelLB(clusterSvc *corev1.Service) *corev1.Service {
 	// we leverage the randomness of golang "for range" when iterating
 OUTERLOOP:
-	for lbKey, lbSvc := range i.cacheMap {
-		if len(i.lbToCRs[lbKey]) >= i.capacityPerLB || len(lbSvc.Status.LoadBalancer.Ingress) == 0 {
+	for lbKey, lbSvc := range g.cacheMap {
+		if len(g.lbToCRs[lbKey]) >= g.capacityPerLB || len(lbSvc.Status.LoadBalancer.Ingress) == 0 {
 			continue
 		}
 		// must satisfy that all svc ports are not occupied in lbSvc
 		for _, svcPort := range clusterSvc.Spec.Ports {
-			if i.lbToPorts[lbKey] == nil {
-				i.lbToPorts[lbKey] = int32Set{}
+			if g.lbToPorts[lbKey] == nil {
+				g.lbToPorts[lbKey] = int32Set{}
 			}
-			if _, ok := i.lbToPorts[lbKey][svcPort.Port]; ok {
+			if _, ok := g.lbToPorts[lbKey][svcPort.Port]; ok {
 				log.WithName("GKE").Info(fmt.Sprintf("incoming service has port conflict with lbSvc %q on port %d", lbKey, svcPort.Port))
 				continue OUTERLOOP
 			}
@@ -168,60 +175,72 @@ OUTERLOOP:
 	return nil
 }
 
-func (i *GKE) AssociateLB(crName, lbName types.NamespacedName, clusterSvc *corev1.Service) error {
-	// Let us also create a Firewall Rule for this port.
-	firewallName := fmt.Sprintf("%s-fwrule-%d", lbName.Name, clusterSvc.Spec.Ports[0].Port)
-	if i.getFirewallRule(firewallName) == nil {
-		i.firewallInsert(firewallName, fmt.Sprint(clusterSvc.Spec.Ports[0].Port))
+func (g *GKE) ensureForwardingRule(lbName, ip string, nodePort int32, proto corev1.Protocol) error {
+	fwdRuleName := getLBForwardRuleName(lbName, nodePort, proto)
+	if g.getForwardingRule(fwdRuleName) == nil {
+		lbPool := g.getTargetPool_usingLBName(lbName)
+		if lbPool == nil {
+			return errors.New("cannot find the TargetPool for the LoadBalancer")
+		}
+		return g.insertForwardingRule(fwdRuleName, ip, nodePort, proto, lbPool.SelfLink)
 	}
+	return nil
+}
+
+func (g *GKE) AssociateLB(crName, lbName types.NamespacedName, clusterSvc *corev1.Service) error {
 	if clusterSvc != nil {
-		if lbSvc, ok := i.cacheMap[lbName]; !ok || len(lbSvc.Status.LoadBalancer.Ingress) == 0 {
+		lbSvc, ok := g.cacheMap[lbName]
+		if !ok || len(lbSvc.Status.LoadBalancer.Ingress) == 0 {
 			return errors.New("LoadBalancer service not exist yet")
 		}
-		// upon program starts, i.lbToPorts[lbName] can be nil
-		if i.lbToPorts[lbName] == nil {
-			i.lbToPorts[lbName] = int32Set{}
+		// upon program starts, g.lbToPorts[lbName] can be nil
+		if g.lbToPorts[lbName] == nil {
+			g.lbToPorts[lbName] = int32Set{}
 		}
 		// update crToPorts
 		for _, svcPort := range clusterSvc.Spec.Ports {
-			i.lbToPorts[lbName][svcPort.Port] = struct{}{}
+			// using NodePort as we haven't found the GKE trick to specify targetPort
+			g.lbToPorts[lbName][svcPort.NodePort] = struct{}{}
+			g.ensureForwardingRule(lbName.Name, lbSvc.Status.LoadBalancer.Ingress[0].IP, svcPort.NodePort, svcPort.Protocol)
 		}
 	}
 
 	// following code might be called multiple times, but shouldn't impact
 	// performance a lot as all of them are O(1) operation
-	_, ok := i.lbToCRs[lbName]
+	_, ok := g.lbToCRs[lbName]
 	if !ok {
-		i.lbToCRs[lbName] = make(nameSet)
+		g.lbToCRs[lbName] = make(nameSet)
 	}
-	i.lbToCRs[lbName][crName] = struct{}{}
-	i.crToLB[crName] = lbName
+	g.lbToCRs[lbName][crName] = struct{}{}
+	g.crToLB[crName] = lbName
 	log.WithName("GKE").Info("AssociateLB", "cr", crName, "lb", lbName)
 	return nil
 }
 
 // DeassociateLB is called by GKE finalizer to clean internal cache
 // no IaaS things should be done for GKE
-func (i *GKE) DeassociateLB(crName types.NamespacedName, clusterSvc *corev1.Service) error {
+func (g *GKE) DeassociateLB(crName types.NamespacedName, clusterSvc *corev1.Service) error {
 	var lbName string
 	// update internal cache
-	if lb, ok := i.crToLB[crName]; ok {
+	if lb, ok := g.crToLB[crName]; ok {
 		lbName = lb.Name
-		delete(i.crToLB, crName)
-		delete(i.lbToCRs[lb], crName)
+		delete(g.crToLB, crName)
+		delete(g.lbToCRs[lb], crName)
 		for _, svcPort := range clusterSvc.Spec.Ports {
-			delete(i.lbToPorts[lb], svcPort.Port)
+			delete(g.lbToPorts[lb], svcPort.Port)
 		}
 		log.WithName("GKE").Info("DeassociateLB", "cr", crName, "lb", lb)
 	}
-    firewallName := fmt.Sprintf("%s-fwrule-%d", lbName, clusterSvc.Spec.Ports[0].Port)
-	i.firewallDelete(firewallName)
+	for _, svcPort := range clusterSvc.Spec.Ports {
+		fwdRuleName := getLBForwardRuleName(lbName, svcPort.NodePort, svcPort.Protocol)
+		g.deleteForwardingRule(fwdRuleName)
+	}
 	return nil
 }
 
-func (i *GKE) UpdateService(svc, lb *corev1.Service) (bool, bool) {
+func (g *GKE) UpdateService(svc, lb *corev1.Service) (bool, bool) {
 	lbName := types.NamespacedName{Name: lb.Name, Namespace: lb.Namespace}
-	occupiedPorts := i.lbToPorts[lbName]
+	occupiedPorts := g.lbToPorts[lbName]
 	if len(occupiedPorts) == 0 {
 		occupiedPorts = int32Set{}
 	}
@@ -229,16 +248,22 @@ func (i *GKE) UpdateService(svc, lb *corev1.Service) (bool, bool) {
 	return portUpdated, true
 }
 
-func (g *GKE) createStaticIP(name, ip string) {
+func isAlreadyExist(err error) bool {
+	apiErr, ok := err.(*googleapi.Error)
+	return ok && (apiErr.Code == 409 || strings.Contains(apiErr.Message, "alreadyExists"))
+}
+
+func (g *GKE) ensureStaticIP(name, ip string) {
 	addr := &compute.Address{
 		Name:    name,
 		Address: ip,
 		Region:  g.region,
 	}
+
 	addrInsertCall := g.client.Addresses.Insert(g.project, g.region, addr)
 	_, err := addrInsertCall.Do()
 
-	if err != nil {
+	if err != nil && !isAlreadyExist(err) {
 		log.WithName("gke").Error(err, "Faied to secure a Static IP")
 	}
 }
@@ -249,6 +274,7 @@ func (g *GKE) getTargetPool_usingLBName(lb string) *compute.TargetPool {
 		log.WithName("gke").Error(err, "Failed to find the loadbalancer "+lb)
 	}
 	for _, item := range resp.Items {
+		// TODO(Huang-Wei): check "name" for exact match
 		if strings.Contains(item.Description, lb) {
 			return item
 		}
@@ -272,31 +298,34 @@ func (g *GKE) getForwardingRule(name string) *compute.ForwardingRule {
 	return nil
 }
 
-func (g *GKE) forwardingRuleInsert(name, ip, item string) {
-	fw := &compute.ForwardingRule{
+func (g *GKE) insertForwardingRule(name, ip string, port int32, proto corev1.Protocol, item string) error {
+	fwd := &compute.ForwardingRule{
 		IPAddress:           ip,
-		IPProtocol:          "TCP",
-		Description:         "KubeConDemo, forwarding rule to reach service through port ",
+		IPProtocol:          strings.ToUpper(string(proto)),
+		Description:         "forwarding rule to reach service through nodePort, generated by SharedLB",
 		LoadBalancingScheme: "EXTERNAL",
 		Target:              item,
 		Name:                name,
-		PortRange:           PORTRANGE,
+		PortRange:           fmt.Sprintf("%d-%d", port, port),
 	}
-	fwInsertCall := g.client.ForwardingRules.Insert(g.project, g.region, fw)
-	_, err := fwInsertCall.Do()
+	fwdInsertCall := g.client.ForwardingRules.Insert(g.project, g.region, fwd)
+	_, err := fwdInsertCall.Do()
 
 	if err != nil {
-		log.WithName("gke").Error(err, "Failed to create the Forwarding Rule for the item "+item)
+		log.WithName("gke").Error(err, "failed to create the forwarding rule", "target", item)
+		return fmt.Errorf("failed to create the forwarding rule for the item %v: %v", item, err)
 	}
+	return nil
 }
 
-func (g *GKE) forwardingRuleDelete(name string) {
-	fwDeleteCall := g.client.ForwardingRules.Delete(g.project, g.region, name)
-	_, err := fwDeleteCall.Do()
+func (g *GKE) deleteForwardingRule(name string) error {
+	fwdDeleteCall := g.client.ForwardingRules.Delete(g.project, g.region, name)
+	_, err := fwdDeleteCall.Do()
 
 	if err != nil {
-		log.WithName("gke").Error(err, "Failed to delete the firewall rule "+name)
+		return fmt.Errorf("failed to delete the forwarding rule %q", name)
 	}
+	return nil
 }
 
 func (g *GKE) getFirewallRule(name string) *compute.Firewall {
@@ -310,20 +339,24 @@ func (g *GKE) getFirewallRule(name string) *compute.Firewall {
 	return resp
 }
 
-func (g *GKE) firewallInsert(name, port string) error {
+func (g *GKE) ensureFirewall(name string) error {
 	fw := &compute.Firewall{
 		Name: name,
 		Allowed: []*compute.FirewallAllowed{
 			{
 				IPProtocol: "TCP",
-				Ports:      []string{port},
+				Ports:      []string{PORTRANGE},
+			},
+			{
+				IPProtocol: "UDP",
+				Ports:      []string{PORTRANGE},
 			},
 		},
 	}
 	fwInsertCall := g.client.Firewalls.Insert(g.project, fw)
 	_, err := fwInsertCall.Do()
 
-	if err != nil {
+	if err != nil && !isAlreadyExist(err) {
 		log.WithName("gke").Error(err, "Unable to add a firewall rule")
 	}
 	return err
