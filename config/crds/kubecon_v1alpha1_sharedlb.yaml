@@ -15,7 +15,6 @@ spec:
   additionalPrinterColumns:
   - name: External-IP
     type: string
-    # TODO(Huang-Wei): verify how it prints for EKS which uses hostname
     JSONPath: .status.loadBalancer.ingress[*].*
   - name: Port
     type: string
