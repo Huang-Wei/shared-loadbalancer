@@ -60,9 +60,12 @@ func (i *IKS) GetCapacityPerLB() int {
 func (i *IKS) UpdateCache(key types.NamespacedName, lbSvc *corev1.Service) {
 	if lbSvc == nil {
 		delete(i.cacheMap, key)
-	} else {
-		i.cacheMap[key] = lbSvc
 	}
+	if len(lbSvc.Status.LoadBalancer.Ingress) == 0 {
+		return
+	}
+
+	i.cacheMap[key] = lbSvc
 }
 
 func (i *IKS) NewService(sharedLB *kubeconv1alpha1.SharedLB) *corev1.Service {

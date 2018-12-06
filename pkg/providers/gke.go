@@ -74,12 +74,14 @@ func newGKEProvider() *GKE {
 func initGCE() *compute.Service {
 	c, err := google.DefaultClient(ctx, compute.CloudPlatformScope)
 	if err != nil {
-		log.WithName("gke").Error(err, "Failed to get GCE client")
+		log.WithName("gke").Info("Failed to get GCE client")
+		panic(err)
 	}
 
 	computeService, err := compute.New(c)
 	if err != nil {
-		log.WithName("gke").Error(err, "Failed to create compute service")
+		log.WithName("gke").Info("Failed to create compute service")
+		panic(err)
 	}
 
 	return computeService
@@ -92,16 +94,18 @@ func (g *GKE) GetCapacityPerLB() int {
 func (g *GKE) UpdateCache(key types.NamespacedName, lbSvc *corev1.Service) {
 	if lbSvc == nil {
 		delete(g.cacheMap, key)
-	} else {
-		if len(lbSvc.Status.LoadBalancer.Ingress) > 0 {
-			// Make this IP Static and then add an Inbound Firewall Rule
-			g.ensureStaticIP(lbSvc.ObjectMeta.Name+"-ip", lbSvc.Status.LoadBalancer.Ingress[0].IP)
-			// Let us also create an Inbound Firewall Rule to open up all ports.
-			// We can also do each port the slb needs but for now this is good enough.
-			g.ensureFirewall(getLBFirewallRuleName(lbSvc.ObjectMeta.Name))
-		}
-		g.cacheMap[key] = lbSvc
+		return
 	}
+	if len(lbSvc.Status.LoadBalancer.Ingress) == 0 {
+		return
+	}
+
+	// Make this IP Static and then add an Inbound Firewall Rule
+	g.ensureStaticIP(lbSvc.ObjectMeta.Name+"-ip", lbSvc.Status.LoadBalancer.Ingress[0].IP)
+	// Let us also create an Inbound Firewall Rule to open up all ports.
+	// We can also do each port the slb needs but for now this is good enough.
+	g.ensureFirewall(getLBFirewallRuleName(lbSvc.ObjectMeta.Name))
+	g.cacheMap[key] = lbSvc
 }
 
 func getLBFirewallRuleName(lbName string) string {
@@ -166,7 +170,7 @@ OUTERLOOP:
 				g.lbToPorts[lbKey] = int32Set{}
 			}
 			if _, ok := g.lbToPorts[lbKey][svcPort.Port]; ok {
-				log.WithName("GKE").Info(fmt.Sprintf("incoming service has port conflict with lbSvc %q on port %d", lbKey, svcPort.Port))
+				log.WithName("gke").Info(fmt.Sprintf("incoming service has port conflict with lbSvc %q on port %d", lbKey, svcPort.Port))
 				continue OUTERLOOP
 			}
 		}
@@ -199,9 +203,12 @@ func (g *GKE) AssociateLB(crName, lbName types.NamespacedName, clusterSvc *corev
 		}
 		// update crToPorts
 		for _, svcPort := range clusterSvc.Spec.Ports {
-			// using NodePort as we haven't found the GKE trick to specify targetPort
+			// TODO(Huang-Wei): should swtich to "reconcile" logic
+			if err := g.ensureForwardingRule(lbName.Name, lbSvc.Status.LoadBalancer.Ingress[0].IP, svcPort.NodePort, svcPort.Protocol); err != nil {
+				return err
+			}
+			// using NodePort as we haven't found the GKE trick to specify targetPort for a forwarding fule
 			g.lbToPorts[lbName][svcPort.NodePort] = struct{}{}
-			g.ensureForwardingRule(lbName.Name, lbSvc.Status.LoadBalancer.Ingress[0].IP, svcPort.NodePort, svcPort.Protocol)
 		}
 	}
 
@@ -213,7 +220,7 @@ func (g *GKE) AssociateLB(crName, lbName types.NamespacedName, clusterSvc *corev
 	}
 	g.lbToCRs[lbName][crName] = struct{}{}
 	g.crToLB[crName] = lbName
-	log.WithName("GKE").Info("AssociateLB", "cr", crName, "lb", lbName)
+	log.WithName("gke").Info("AssociateLB", "cr", crName, "lb", lbName)
 	return nil
 }
 
@@ -229,11 +236,13 @@ func (g *GKE) DeassociateLB(crName types.NamespacedName, clusterSvc *corev1.Serv
 		for _, svcPort := range clusterSvc.Spec.Ports {
 			delete(g.lbToPorts[lb], svcPort.Port)
 		}
-		log.WithName("GKE").Info("DeassociateLB", "cr", crName, "lb", lb)
+		log.WithName("gke").Info("DeassociateLB", "cr", crName, "lb", lb)
 	}
 	for _, svcPort := range clusterSvc.Spec.Ports {
 		fwdRuleName := getLBForwardRuleName(lbName, svcPort.NodePort, svcPort.Protocol)
-		g.deleteForwardingRule(fwdRuleName)
+		if err := g.deleteForwardingRule(fwdRuleName); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -288,7 +297,7 @@ func (g *GKE) getForwardingRule(name string) *compute.ForwardingRule {
 		if strings.Contains(err.Error(), "Error 404") {
 			return nil
 		}
-		log.WithName("GKE").Error(err, "Failed to get Forwarding rules")
+		log.WithName("gke").Error(err, "Failed to get Forwarding rules")
 	}
 	for _, item := range resp.Items {
 		if strings.Compare(item.Name, name) == 0 {
@@ -328,17 +337,6 @@ func (g *GKE) deleteForwardingRule(name string) error {
 	return nil
 }
 
-func (g *GKE) getFirewallRule(name string) *compute.Firewall {
-	resp, err := g.client.Firewalls.Get(g.project, name).Context(ctx).Do()
-	if err != nil {
-		if strings.Contains(err.Error(), "Error 404") {
-			return nil
-		}
-		log.WithName("GKE").Error(err, "Failed to get Firewalls rules")
-	}
-	return resp
-}
-
 func (g *GKE) ensureFirewall(name string) error {
 	fw := &compute.Firewall{
 		Name: name,
@@ -362,6 +360,19 @@ func (g *GKE) ensureFirewall(name string) error {
 	return err
 }
 
+// not used yet
+func (g *GKE) getFirewallRule(name string) *compute.Firewall {
+	resp, err := g.client.Firewalls.Get(g.project, name).Context(ctx).Do()
+	if err != nil {
+		if strings.Contains(err.Error(), "Error 404") {
+			return nil
+		}
+		log.WithName("gke").Error(err, "Failed to get Firewalls rules")
+	}
+	return resp
+}
+
+// not used yet
 func (g *GKE) firewallDelete(name string) error {
 	fwDeleteCall := g.client.Firewalls.Delete(g.project, name)
 	_, err := fwDeleteCall.Do()
