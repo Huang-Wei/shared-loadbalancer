@@ -29,13 +29,13 @@ import (
 var log logr.Logger
 
 var (
-	// svcPostfix is the stringa appended to cluster service object
+	// SvcPostfix is the stringa appended to cluster service object
 	SvcPostfix = "-service"
 	// namespace that LoadBalancer service will be created in
 	// most probably it's the same value of the namespace that this binary runs in
 	namespace = GetEnvVal("NAMESPACE", "default")
 	// capacity is the threshold value a LoadBalancer service can hold
-	capacity = GetEnvValInt("CAPACITY", 2)
+	capacity = GetEnvValInt("CAPACITY", 5)
 	// FinalizerName is the name of finalizer attached to Cluster Service object
 	FinalizerName = "sharedlb.kubecon.k8s.io/finalizer"
 )

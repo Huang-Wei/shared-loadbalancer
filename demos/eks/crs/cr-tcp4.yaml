@@ -1,0 +1,10 @@
+apiVersion: kubecon.k8s.io/v1alpha1
+kind: SharedLB
+metadata:
+  name: sharedlb-tcp4
+spec:
+  ports:
+  - port: 4004
+    targetPort: 4000
+  selector:
+    app: tcp4

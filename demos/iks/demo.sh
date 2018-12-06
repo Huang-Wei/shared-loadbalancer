@@ -55,7 +55,6 @@ doit kubectl create -f demos/iks/crs/cr-tcp-random-port.yaml
 doit kubectl get svc
 doit kubectl get slb
 
-
 # comment Cleanup
 
 # doit kubectl delete deploy --all

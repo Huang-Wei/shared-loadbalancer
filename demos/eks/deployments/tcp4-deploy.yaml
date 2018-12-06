@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tcp4-deploy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tcp4
+  template:
+    metadata:
+      labels:
+        app: tcp4
+    spec:
+      containers:
+      - name: tcp4
+        image: hweicdl/netcat-tcp:v0.1.0
+        ports:
+        - containerPort: 4000
