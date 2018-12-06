@@ -91,20 +91,22 @@ func (e *EKS) UpdateCache(key types.NamespacedName, lbSvc *corev1.Service) {
 	if lbSvc == nil {
 		delete(e.cacheMap, key)
 		delete(e.cacheELB, key)
-	} else {
-		e.cacheMap[key] = lbSvc
-		// handle ELB stuff
-		if len(lbSvc.Status.LoadBalancer.Ingress) == 1 {
-			hostname := lbSvc.Status.LoadBalancer.Ingress[0].Hostname
-			elbName := strings.Split(strings.Split(hostname, ".")[0], "-")[0]
-			if result, err := e.queryELB(elbName); err != nil {
-				log.WithName("eks").Error(err, "cannot query ELB", "key", key, "elbName", elbName)
-			} else {
-				log.WithName("eks").Info("ELB obj is updated in local cache", "key", key, "elbName", elbName)
-				e.cacheELB[key] = result
-			}
-		}
+		return
 	}
+	if len(lbSvc.Status.LoadBalancer.Ingress) == 0 {
+		return
+	}
+
+	// handle ELB stuff
+	hostname := lbSvc.Status.LoadBalancer.Ingress[0].Hostname
+	elbName := strings.Split(strings.Split(hostname, ".")[0], "-")[0]
+	if result, err := e.queryELB(elbName); err != nil {
+		log.WithName("eks").Error(err, "cannot query ELB", "key", key, "elbName", elbName)
+	} else {
+		log.WithName("eks").Info("ELB obj is updated in local cache", "key", key, "elbName", elbName)
+		e.cacheELB[key] = result
+	}
+	e.cacheMap[key] = lbSvc
 }
 
 func (e *EKS) NewService(sharedLB *kubeconv1alpha1.SharedLB) *corev1.Service {

@@ -119,19 +119,21 @@ func (a *AKS) UpdateCache(key types.NamespacedName, lbSvc *corev1.Service) {
 	if lbSvc == nil {
 		delete(a.cacheMap, key)
 		delete(a.cachePIPMap, key)
-	} else {
-		a.cacheMap[key] = lbSvc
-		// handle azure public/frontend ip
-		if len(lbSvc.Status.LoadBalancer.Ingress) == 1 {
-			pip := lbSvc.Status.LoadBalancer.Ingress[0].IP
-			if result, err := a.queryPublicIP(pip, lbSvc); err != nil {
-				log.WithName("aks").Error(err, "cannot query public ip", "pip", pip)
-			} else {
-				log.WithName("aks").Info("pip object is updated in local cache", "key", key, "pip", pip)
-				a.cachePIPMap[key] = result
-			}
-		}
+		return
 	}
+	if len(lbSvc.Status.LoadBalancer.Ingress) == 0 {
+		return
+	}
+
+	// handle Azure public/frontend ip
+	pip := lbSvc.Status.LoadBalancer.Ingress[0].IP
+	if result, err := a.queryPublicIP(pip, lbSvc); err != nil {
+		log.WithName("aks").Error(err, "cannot query public ip", "pip", pip)
+	} else {
+		log.WithName("aks").Info("pip object is updated in local cache", "key", key, "pip", pip)
+		a.cachePIPMap[key] = result
+	}
+	a.cacheMap[key] = lbSvc
 }
 
 func (a *AKS) NewService(sharedLB *kubeconv1alpha1.SharedLB) *corev1.Service {
