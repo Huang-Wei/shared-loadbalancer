@@ -14,9 +14,10 @@ doit kubectl version --short
 doit kubectl get svc
 doit kubectl get pod
 
-comment Create 2 deployments - one TCP and one UDP
+comment We are going to create 2 deployments - one TCP and one UDP
 
-doit cat demos/iks/deployments/*
+doit cat demos/iks/deployments/tcp-deploy.yaml
+doit cat demos/iks/deployments/udp-deploy.yaml
 doit kubectl create -f demos/iks/deployments/
 doit kubectl get pod
 
@@ -32,6 +33,7 @@ doit kubectl create -f demos/iks/crs/cr-tcp.yaml
 doit kubectl get svc
 doit kubectl get slb
 
+comment By default CAPACITY is 5
 doit kubectl create -f demos/iks/crs/cr-udp.yaml
 doit kubectl get svc
 doit kubectl get slb
@@ -45,6 +47,14 @@ comment Checkout pod logs
 
 doit kubectl logs $(kubectl get po | grep tcp-deploy | awk '{print $1}')
 doit kubectl logs $(kubectl get po | grep udp-deploy | awk '{print $1}')
+
+comment What if I just want a random source port
+
+doit cat demos/iks/crs/cr-tcp-random-port.yaml
+doit kubectl create -f demos/iks/crs/cr-tcp-random-port.yaml
+doit kubectl get svc
+doit kubectl get slb
+
 
 # comment Cleanup
 
