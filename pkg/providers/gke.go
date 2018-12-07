@@ -41,6 +41,7 @@ const PORTRANGE = "30000-32767"
 type GKE struct {
 	client          *compute.Service
 	project, region string
+
 	// key is namespacedName of a LB Serivce, val is the service
 	cacheMap map[types.NamespacedName]*corev1.Service
 
@@ -192,10 +193,14 @@ func (g *GKE) ensureForwardingRule(lbName, ip string, nodePort int32, proto core
 }
 
 func (g *GKE) AssociateLB(crName, lbName types.NamespacedName, clusterSvc *corev1.Service) error {
+	// a) create GCP LoadBalancer Forwarding Rule
 	if clusterSvc != nil {
-		lbSvc, ok := g.cacheMap[lbName]
-		if !ok || len(lbSvc.Status.LoadBalancer.Ingress) == 0 {
-			return errors.New("LoadBalancer service not exist yet")
+		if lbSvc := g.cacheMap[lbName]; lbSvc != nil {
+			for _, svcPort := range clusterSvc.Spec.Ports {
+				if err := g.ensureForwardingRule(lbName.Name, lbSvc.Status.LoadBalancer.Ingress[0].IP, svcPort.NodePort, svcPort.Protocol); err != nil {
+					return err
+				}
+			}
 		}
 		// upon program starts, g.lbToPorts[lbName] can be nil
 		if g.lbToPorts[lbName] == nil {
@@ -203,15 +208,11 @@ func (g *GKE) AssociateLB(crName, lbName types.NamespacedName, clusterSvc *corev
 		}
 		// update crToPorts
 		for _, svcPort := range clusterSvc.Spec.Ports {
-			// TODO(Huang-Wei): should swtich to "reconcile" logic
-			if err := g.ensureForwardingRule(lbName.Name, lbSvc.Status.LoadBalancer.Ingress[0].IP, svcPort.NodePort, svcPort.Protocol); err != nil {
-				return err
-			}
-			// using NodePort as we haven't found the GKE trick to specify targetPort for a forwarding fule
 			g.lbToPorts[lbName][svcPort.NodePort] = struct{}{}
 		}
 	}
 
+	// c) update internal cache
 	// following code might be called multiple times, but shouldn't impact
 	// performance a lot as all of them are O(1) operation
 	_, ok := g.lbToCRs[lbName]
@@ -227,23 +228,28 @@ func (g *GKE) AssociateLB(crName, lbName types.NamespacedName, clusterSvc *corev
 // DeassociateLB is called by GKE finalizer to clean internal cache
 // no IaaS things should be done for GKE
 func (g *GKE) DeassociateLB(crName types.NamespacedName, clusterSvc *corev1.Service) error {
-	var lbName string
-	// update internal cache
-	if lb, ok := g.crToLB[crName]; ok {
-		lbName = lb.Name
-		delete(g.crToLB, crName)
-		delete(g.lbToCRs[lb], crName)
+	lbName, ok := g.crToLB[crName]
+	if !ok {
+		return nil
+	}
+
+	// a) delete GCP LoadBalancer Forwarding rule
+	if lbSvc := g.cacheMap[lbName]; lbSvc != nil {
 		for _, svcPort := range clusterSvc.Spec.Ports {
-			delete(g.lbToPorts[lb], svcPort.Port)
+			fwdRuleName := getLBForwardRuleName(lbName.Name, svcPort.NodePort, svcPort.Protocol)
+			if err := g.deleteForwardingRule(fwdRuleName); err != nil {
+				return err
+			}
 		}
-		log.WithName("gke").Info("DeassociateLB", "cr", crName, "lb", lb)
 	}
+
+	// b) update internal cache
+	delete(g.crToLB, crName)
+	delete(g.lbToCRs[lbName], crName)
 	for _, svcPort := range clusterSvc.Spec.Ports {
-		fwdRuleName := getLBForwardRuleName(lbName, svcPort.NodePort, svcPort.Protocol)
-		if err := g.deleteForwardingRule(fwdRuleName); err != nil {
-			return err
-		}
+		delete(g.lbToPorts[lbName], svcPort.Port)
 	}
+	log.WithName("gke").Info("DeassociateLB", "cr", crName, "lb", lbName)
 	return nil
 }
 
