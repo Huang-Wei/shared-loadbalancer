@@ -327,7 +327,6 @@ func (g *GKE) insertForwardingRule(name, ip string, port int32, proto corev1.Pro
 	_, err := fwdInsertCall.Do()
 
 	if err != nil {
-		log.WithName("gke").Error(err, "failed to create the forwarding rule", "target", item)
 		return fmt.Errorf("failed to create the forwarding rule for the item %v: %v", item, err)
 	}
 	return nil
