@@ -34,6 +34,24 @@ import (
 	cloudprovider "k8s.io/cloud-provider"
 )
 
+/* Pre-config steps:
+
+1. az ad sp create-for-rbac --name 'sharedlb'
+
+2. az role assignment create --assignee {appId from step 1} --role 4d97b98b-1d4f-4787-a291-c67834d212e7
+
+    > `appid` can be get from step 1; 4d97b98b-1d4f-4787-a291-c67834d212e7 is a pre-created role in Azure for advanced network permissions.
+
+3. setup following env variables:
+
+    ```
+    export AZURE_TENANT_ID={tenant string from step 1}
+    export AZURE_CLIENT_ID={appId string from step 1}
+    export AZURE_CLIENT_SECRET={password string from step 1}
+    export AZURE_SUBSCRIPTION_ID={can be get from Azure portal}
+    ```
+*/
+
 // Refs:
 // * https://github.com/Azure/azure-sdk-for-go
 // * https://github.com/Azure-Samples/azure-sdk-for-go-samples

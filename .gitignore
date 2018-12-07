@@ -1,3 +1,7 @@
+# Doit ignore files
+cmds
+out
+
 # Azure local testing config file
 .env
 

@@ -60,6 +60,7 @@ func (i *IKS) GetCapacityPerLB() int {
 func (i *IKS) UpdateCache(key types.NamespacedName, lbSvc *corev1.Service) {
 	if lbSvc == nil {
 		delete(i.cacheMap, key)
+		return
 	}
 	if len(lbSvc.Status.LoadBalancer.Ingress) == 0 {
 		return

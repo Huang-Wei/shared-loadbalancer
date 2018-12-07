@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tcp3-deploy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tcp3
+  template:
+    metadata:
+      labels:
+        app: tcp3
+    spec:
+      containers:
+      - name: tcp3
+        image: hweicdl/netcat-tcp:v0.1.0
+        ports:
+        - containerPort: 4000
