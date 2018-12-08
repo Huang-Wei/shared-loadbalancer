@@ -22,6 +22,7 @@ doit kubectl get crd
 doit kubectl get slb
 
 comment To demo the case LB resource is out of capacity, CAPACITY is configured to 2
+doit cat demos/eks/crs/cr-tcp1.yaml
 doit kubectl create -f demos/eks/crs/cr-tcp1.yaml
 # doit kubectl get svc
 
@@ -51,7 +52,7 @@ doit nc -zv $(echo "$out" | grep sharedlb-tcp1 | awk '{print $2}') $(echo "$out"
 comment "Let's delete the 1st SharedLB CR"
 doit kubectl delete slb sharedlb-tcp1
 doit kubectl get svc
-doit kubectl get slb -o custom-columns="NAME:metadata.name,EXTERNAL-IP:.status.loadBalancer.ingress[*].*,PORT:.spec.ports[*].port"
+doit kubectl get slb
 comment "Checkout AWS console again"
 
 # comment Cleanup

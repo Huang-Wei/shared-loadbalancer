@@ -43,6 +43,12 @@ comment AKS LB needs another ~1 minute to be created
 doit kubectl get svc
 doit kubectl get slb
 
+comment Use nc to try connecting
+out=$(kubectl get slb)
+doit nc -zv $(echo "$out" | grep sharedlb-tcp1 | awk '{print $2}') $(echo "$out" | grep sharedlb-tcp1 | awk '{print $3}')
+doit nc -zv $(echo "$out" | grep sharedlb-tcp2 | awk '{print $2}') $(echo "$out" | grep sharedlb-tcp2 | awk '{print $3}')
+
+comment Right now both LBs have spare capacity
 doit kubectl create -f demos/aks/crs/cr-tcp-random.yaml
 doit kubectl get svc
 doit kubectl get slb

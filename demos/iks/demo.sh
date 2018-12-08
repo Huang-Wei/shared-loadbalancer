@@ -11,15 +11,10 @@ doit echo "\$KUBECONFIG"
 doit kubectl get node
 doit kubectl version --short
 
-doit kubectl get svc
-doit kubectl get pod
+doit kubectl get svc,pod
 
 comment We are going to create 2 deployments - one TCP and one UDP
-
-doit cat demos/iks/deployments/tcp-deploy.yaml
-doit cat demos/iks/deployments/udp-deploy.yaml
 doit kubectl create -f demos/iks/deployments/
-doit kubectl get pod
 
 comment Custom Resource Definition has been pre-created
 doit kubectl get crd
